@@ -362,6 +362,108 @@ def cmd_preset(args: argparse.Namespace) -> None:
         print(f"[{i:2}] {vals}")
 
 
+# ---------- 高频专用命令：花费汇总 ----------
+#
+# 接口：POST /report/chargeSum.json
+# 已验证参数（来自浏览器 DevTools 实际请求）：
+#   queryDomains: ["scene"]           — 维度（"scene"=营销场景, "campaign"=计划, "adgroup"=单元, "keyword"=关键词）
+#   queryFieldIn: [指标 ID 列表]       — 见 CHARGE_METRICS 字典
+#   startTime/endTime: YYYY-MM-DD     — 注意是带 - 的格式，不是 YYYYMMDD
+#   splitType: "day"                  — 时间拆分
+#   rptType: "account"                — 报表类型
+#   bizCode: "universalBP"            — 业务码
+#   source: "baseReport"              — 基础报表
+#   effectEqual: 15                   — 转化窗口天数（15/7/1）
+
+CHARGE_METRICS = {
+    "adPv": "展现量",
+    "click": "点击量",
+    "charge": "花费(元)",
+    "ctr": "点击率",
+    "ecpc": "平均点击花费",
+    "alipayInshopAmt": "成交金额",
+    "alipayInshopNum": "成交笔数",
+    "cvr": "转化率",
+}
+
+CHARGE_SCENE_FIELDS = {
+    "searchCharge": "关键词推广",
+    "displayCharge": "人群推广",
+    "contentSceneCharge": "内容场景",
+    "siteSceneCharge": "站点场景",
+    "activitySceneCharge": "活动场景",
+    "agencySceneCharge": "代运营场景",
+    "crowdSceneCharge": "人群场景",
+    "shopSceneCharge": "店铺场景",
+    "itemSceneCharge": "商品场景",
+}
+
+
+def fetch_charge_summary(*, start_date: str, end_date: str,
+                          effect_window: int = 15,
+                          cookies: dict[str, str] | None = None) -> dict[str, Any]:
+    """拉取「营销场景报表」总览：每个推广场景花了多少钱。"""
+    cookies = cookies or load_alimama_cookies()
+    body = {
+        "fromRealTime": False,
+        "source": "baseReport",
+        "byPage": True,
+        "byPageWithoutCount": False,
+        "totalTag": True,
+        "needCountAccelerate": True,
+        "bizCode": "universalBP",
+        "effectEqual": effect_window,
+        "startTime": start_date,
+        "endTime": end_date,
+        "havingList": [],
+        "pageSize": 20,
+        "queryDomains": ["scene"],
+        "queryFieldIn": list(CHARGE_METRICS.keys()),
+        "rptType": "account",
+        "splitType": "day",
+        "unifyType": "zhai",
+    }
+    return _api_call("/report/chargeSum.json", body, method="POST", cookies=cookies)
+
+
+def cmd_charge_summary(args: argparse.Namespace) -> None:
+    end = args.end_date or args.date
+    data = fetch_charge_summary(start_date=args.date, end_date=end, effect_window=args.window)
+    if args.raw or args.out:
+        out = json.dumps(data, ensure_ascii=False, indent=2)
+        if args.out:
+            Path(args.out).write_text(out)
+            print(f"已写入 {args.out}", file=sys.stderr)
+        else:
+            print(out)
+        return
+
+    d = data.get("data") or {}
+    if not d:
+        print("（响应为空，可能时间窗口无投放）")
+        return
+
+    total = d.get("totalCharge", 0) or 0
+    print(f"# 万相台 推广花费汇总")
+    print(f"# 区间: {args.date} ~ {end}（{args.window} 天转化窗口）\n")
+
+    # 各场景花费排序
+    scenes = []
+    for k, label in CHARGE_SCENE_FIELDS.items():
+        v = d.get(k) or 0
+        if v > 0 or k in ("searchCharge", "displayCharge"):
+            scenes.append((label, v))
+    scenes.sort(key=lambda x: -x[1])
+
+    print(f"{'场景':<15} {'花费(元)':>12} {'占比':>8}")
+    print("-" * 40)
+    for label, v in scenes:
+        pct = f"{v/total*100:.1f}%" if total else "—"
+        print(f"{label:<15} {v:>12,.2f} {pct:>8}")
+    print("-" * 40)
+    print(f"{'总花费':<15} {total:>12,.2f} {'100.0%':>8}")
+
+
 # ---------- main ----------
 
 def build_parser() -> argparse.ArgumentParser:
@@ -381,6 +483,15 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--param", "-p", action="append", help="附加 body 字段 key=value，可重复")
     ap.add_argument("--referer", help="自定义 Referer 头")
     ap.set_defaults(func=cmd_api)
+
+    cs = sp.add_parser("charge-summary", help="花费汇总：各营销场景花了多少（关键词推广/人群推广/...）")
+    cs.add_argument("--date", default=yesterday, help=f"开始日期 YYYY-MM-DD (默认 {yesterday})")
+    cs.add_argument("--end-date", help="结束日期 (默认 = --date)")
+    cs.add_argument("--window", type=int, default=15, choices=[1, 7, 15],
+                    help="转化窗口天数 1/7/15 (默认 15)")
+    cs.add_argument("--raw", action="store_true", help="输出原始 JSON")
+    cs.add_argument("--out", help="输出到文件")
+    cs.set_defaults(func=cmd_charge_summary)
 
     for name, preset in LIST_PRESETS.items():
         sub = sp.add_parser(name, help=preset["desc"])
