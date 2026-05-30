@@ -426,6 +426,162 @@ def fetch_charge_summary(*, start_date: str, end_date: str,
     return _api_call("/report/chargeSum.json", body, method="POST", cookies=cookies)
 
 
+# ---------- 通用报表接口 /report/query.json ----------
+#
+# 从 HAR 实测发现：万相台 11 个侧栏报表里有 10 个走同一个 /report/query.json，
+# 仅靠 rptType + queryDomains 两个参数切换。
+#
+# 完整 17 个指标（queryFieldIn）：
+REPORT_METRICS = {
+    "charge": "花费(元)",
+    "click": "点击量",
+    "ctr": "点击率",
+    "ecpc": "平均点击花费",
+    "alipayInshopAmt": "成交金额",
+    "alipayInshopNum": "成交笔数",
+    "alipayDirNum": "直接成交单数",
+    "cartInshopNum": "加购数",
+    "cvr": "转化率",
+    "roi": "投产比",
+    "cartRate": "加购率",
+    "cartCost": "加购成本",
+    "colCartCost": "收藏加购成本",
+    "itemColCartCost": "商品收藏加购成本",
+    "inshopPotentialUvRate": "潜客率",
+    "newAlipayInshopUvRate": "新成交客户率",
+}
+
+# rptType 对应的中文名 + 默认 queryDomains（明细列表用）
+REPORT_TYPES = {
+    "campaign":        {"name": "计划报表",    "list_domain": "campaign"},
+    "adgroup":         {"name": "单元报表",    "list_domain": "adgroup"},
+    "bidword":         {"name": "关键词报表",  "list_domain": "word"},
+    "crowd":           {"name": "人群报表",    "list_domain": "crowd"},
+    "item_promotion":  {"name": "商品报表",    "list_domain": "promotion"},
+    "creative":        {"name": "创意报表",    "list_domain": "creative"},
+    "area":            {"name": "地域报表",    "list_domain": "province"},
+    "coupon":          {"name": "权益报表",    "list_domain": "adgroup"},
+    "real_time":       {"name": "实时报表",    "list_domain": "date"},
+    "other_promotion": {"name": "其他推广报表","list_domain": "promotion"},
+}
+
+
+def fetch_report(*, rpt_type: str, dimension: str,
+                  start_date: str, end_date: str,
+                  page_no: int = 1, page_size: int = 20,
+                  effect_window: int = 15,
+                  cookies: dict[str, str] | None = None) -> dict[str, Any]:
+    """通用报表查询。
+
+    rpt_type:   campaign / adgroup / bidword / crowd / item_promotion / creative / area / coupon / real_time
+    dimension:  account (总览) / date (按天) / campaign / adgroup / word / crowd / promotion / province / creative
+    """
+    cookies = cookies or load_alimama_cookies()
+    is_realtime = rpt_type == "real_time"
+    body = {
+        "bizCode": "universalBP",
+        "fromRealTime": is_realtime,
+        "source": "baseReport",
+        "from": "pcBaseReport",
+        "byPage": True,
+        "byPageWithoutCount": False,
+        "totalTag": True,
+        "needCountAccelerate": True,
+        "rptType": rpt_type,
+        "queryDomains": [dimension],
+        "queryFieldIn": list(REPORT_METRICS.keys()),
+        "startTime": start_date,
+        "endTime": end_date,
+        "splitType": "hour" if is_realtime else "day",
+        "effectEqual": effect_window,
+        "havingList": [],
+        "pageSize": page_size,
+        "pageNo": page_no,
+        "unifyType": "zhai",
+    }
+    return _api_call("/report/query.json", body, method="POST", cookies=cookies)
+
+
+def cmd_report(args: argparse.Namespace) -> None:
+    rpt_info = REPORT_TYPES[args.rpt_type]
+    dim = args.dim or rpt_info["list_domain"]
+    end = args.end_date or args.date
+    data = fetch_report(
+        rpt_type=args.rpt_type, dimension=dim,
+        start_date=args.date, end_date=end,
+        page_no=args.page, page_size=args.limit,
+        effect_window=args.window,
+    )
+    if args.raw or args.out:
+        out = json.dumps(data, ensure_ascii=False, indent=2)
+        if args.out:
+            Path(args.out).write_text(out)
+            print(f"已写入 {args.out}", file=sys.stderr)
+        else:
+            print(out)
+        return
+
+    d = data.get("data") or {}
+    raw_total = d.get("totalData")
+    # totalData 可能是 list 或 dict，规范化
+    if isinstance(raw_total, list):
+        total_data = raw_total[0] if raw_total else {}
+    elif isinstance(raw_total, dict):
+        total_data = raw_total
+    else:
+        total_data = {}
+    rows = d.get("list") or []
+    count = d.get("count", 0)
+
+    print(f"# 万相台 - {rpt_info['name']}（维度: {dim}）")
+    print(f"# {args.date} ~ {end}  转化窗口 {args.window} 天  共 {count} 条，本页 {len(rows)}")
+
+    # 总计
+    if total_data:
+        charge = float(total_data.get("charge") or 0)
+        amt = float(total_data.get("alipayInshopAmt") or 0)
+        roi = float(total_data.get("roi") or 0)
+        click = total_data.get("click") or 0
+        print(f"\n  总计: 花费 ¥{charge:,.2f} | 成交 ¥{amt:,.2f} | ROI {roi:.2f} | 点击 {click:,}")
+
+    if not rows:
+        print("\n（无明细数据）")
+        return
+
+    # 明细按 charge 降序
+    rows_sorted = sorted(rows, key=lambda r: -float(r.get("charge") or 0))
+    print()
+    # 不同报表的 name 字段不一样，按 rptType 优先级查找
+    name_candidates = {
+        "campaign":        ["promotionName", "campaignName", "name"],
+        "adgroup":         ["adgroupName", "promotionName", "name"],
+        "bidword":         ["originalWord", "word", "bidword", "name"],
+        "crowd":           ["crowdName", "targetCrowd", "promotionName", "name"],
+        "item_promotion":  ["itemTitle", "promotionName", "name"],
+        "creative":        ["creativeTitle", "creativeName", "promotionName", "name"],
+        "area":            ["provinceName", "province", "areaName", "name"],
+        "coupon":          ["couponName", "promotionName", "name"],
+        "real_time":       ["dateStr", "date", "hour", "promotionName"],
+        "other_promotion": ["promotionName", "name"],
+    }
+    name_field = None
+    for cand in name_candidates.get(args.rpt_type, ["promotionName", "name"]):
+        if rows_sorted[0].get(cand):
+            name_field = cand
+            break
+
+    print(f"{'#':<4} {'名称':<28} {'花费':>9} {'成交':>10} {'ROI':>6} {'点击':>6} {'CTR':>6}")
+    print("-" * 80)
+    for i, r in enumerate(rows_sorted[:args.limit], 1):
+        name = str(r.get(name_field, '?'))[:26] if name_field else '?'
+        charge = float(r.get("charge") or 0)
+        amt = float(r.get("alipayInshopAmt") or 0)
+        roi = float(r.get("roi") or 0)
+        click = r.get("click") or 0
+        ctr = float(r.get("ctr") or 0)
+        print(f"{i:<4} {name:<28} {charge:>9,.2f} {amt:>10,.2f} {roi:>6.2f} {click:>6} {ctr*100:>5.1f}%")
+
+
 def cmd_charge_summary(args: argparse.Namespace) -> None:
     end = args.end_date or args.date
     data = fetch_charge_summary(start_date=args.date, end_date=end, effect_window=args.window)
@@ -492,6 +648,32 @@ def build_parser() -> argparse.ArgumentParser:
     cs.add_argument("--raw", action="store_true", help="输出原始 JSON")
     cs.add_argument("--out", help="输出到文件")
     cs.set_defaults(func=cmd_charge_summary)
+
+    # 通用报表子命令家族：report-campaign / report-keyword / report-crowd / ...
+    REPORT_ALIASES = {
+        "report-campaign": "campaign",
+        "report-adgroup":  "adgroup",
+        "report-keyword":  "bidword",
+        "report-crowd":    "crowd",
+        "report-item":     "item_promotion",
+        "report-creative": "creative",
+        "report-area":     "area",
+        "report-coupon":   "coupon",
+        "report-realtime": "real_time",
+        "report-other":    "other_promotion",
+    }
+    for cmd_name, rpt in REPORT_ALIASES.items():
+        info = REPORT_TYPES[rpt]
+        sub = sp.add_parser(cmd_name, help=f"{info['name']}（按 {info['list_domain']} 维度，按花费降序）")
+        sub.add_argument("--date", default=yesterday, help=f"开始日期 YYYY-MM-DD (默认 {yesterday})")
+        sub.add_argument("--end-date", help="结束日期 (默认 = --date)")
+        sub.add_argument("--dim", help=f"维度 (默认 {info['list_domain']}；可选 account/date/...)")
+        sub.add_argument("--window", type=int, default=15, choices=[1, 7, 15], help="转化窗口 1/7/15 天")
+        sub.add_argument("--limit", type=int, default=10, help="拉多少条 (默认 10)")
+        sub.add_argument("--page", type=int, default=1)
+        sub.add_argument("--raw", action="store_true")
+        sub.add_argument("--out", help="输出到文件")
+        sub.set_defaults(func=cmd_report, rpt_type=rpt)
 
     for name, preset in LIST_PRESETS.items():
         sub = sp.add_parser(name, help=preset["desc"])
