@@ -582,6 +582,85 @@ def cmd_report(args: argparse.Namespace) -> None:
         print(f"{i:<4} {name:<28} {charge:>9,.2f} {amt:>10,.2f} {roi:>6.2f} {click:>6} {ctr*100:>5.1f}%")
 
 
+# ---------- "推广"模块（不是"报表"！）—— 当前在投的计划列表 ----------
+#
+# 接口：POST /campaign/horizontal/findPage.json
+# 区分参数：bizCode (映射到不同推广玩法)
+# 不需要日期 — 这是"当前在投"快照，不是历史
+
+PROMO_BIZ_CODES = {
+    "wholesite": ("onebpSite",    "货品全站推广"),
+    "keyword":   ("onebpSearch",  "关键词推广"),
+    "crowd":     ("onebpDisplay", "人群推广"),
+}
+
+
+def fetch_promo_campaigns(*, biz_code: str, page_size: int = 20, offset: int = 0,
+                           status_list: list[str] | None = None,
+                           cookies: dict[str, str] | None = None) -> dict[str, Any]:
+    """拉某种推广玩法 (bizCode) 下当前的所有计划。"""
+    cookies = cookies or load_alimama_cookies()
+    body = {
+        "bizCode": biz_code,
+        "adgroupRequired": False,
+        "offset": offset,
+        "pageSize": page_size,
+        "statusList": status_list or ["start", "pause"],
+    }
+    # 关键：bizCode 必须同时放在 URL 上（HAR 实测），否则服务端不过滤
+    path = f"/campaign/horizontal/findPage.json?bizCode={biz_code}"
+    return _api_call(path, body, method="POST", cookies=cookies)
+
+
+def cmd_promo(args: argparse.Namespace) -> None:
+    biz_code, label = PROMO_BIZ_CODES[args.promo_key]
+    data = fetch_promo_campaigns(
+        biz_code=biz_code, page_size=args.limit,
+        offset=(args.page - 1) * args.limit,
+        status_list=args.status,
+    )
+    if args.raw or args.out:
+        out = json.dumps(data, ensure_ascii=False, indent=2)
+        if args.out:
+            Path(args.out).write_text(out)
+            print(f"已写入 {args.out}", file=sys.stderr)
+        else:
+            print(out)
+        return
+
+    d = data.get("data") or {}
+    rows = d.get("list") or []
+    count = d.get("count", 0)
+
+    print(f"# 万相台 - {label}（bizCode={biz_code}）")
+    print(f"# 当前共 {count} 个计划，本页 {len(rows)}")
+    if args.status != ["start", "pause"]:
+        print(f"# 过滤状态: {args.status}")
+    print()
+
+    # 按日预算降序
+    rows_sorted = sorted(rows, key=lambda r: -float(r.get("dayBudget") or 0))
+    for i, r in enumerate(rows_sorted, 1):
+        cid = r.get("campaignId", "?")
+        name = (r.get("campaignName") or "?")[:35]
+        status = r.get("displayStatus", "?")
+        status_label = {"start": "🟢 在投", "pause": "⏸  暂停", "end": "⏹  结束"}.get(status, status)
+        is_top = "⭐" if r.get("topStatus") else "  "
+        budget = float(r.get("dayBudget") or 0)
+        bid_v = float(r.get("constraintValue") or 0)
+        bid_unit = (r.get("bidUnit") or "—").replace("${constraintValue}", str(bid_v))
+        bid_type = r.get("bidTypeV2") or "—"
+        period = r.get("launchPeriodDisplayTime") or "全天"
+        ptype = r.get("promotionType") or "—"
+        ctime = (r.get("gmtCreate") or "—")[:10]
+
+        print(f"[{i:>2}] {is_top}{status_label}  campaignId={cid}")
+        print(f"     计划名: {name}")
+        print(f"     日预算: ¥{budget:<8,.0f}  出价: {bid_unit:<25}  类型: {bid_type}")
+        print(f"     投放时段: {period:<15}  推广类型: {ptype:<6}  创建: {ctime}")
+        print()
+
+
 def cmd_charge_summary(args: argparse.Namespace) -> None:
     end = args.end_date or args.date
     data = fetch_charge_summary(start_date=args.date, end_date=end, effect_window=args.window)
@@ -639,6 +718,18 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--param", "-p", action="append", help="附加 body 字段 key=value，可重复")
     ap.add_argument("--referer", help="自定义 Referer 头")
     ap.set_defaults(func=cmd_api)
+
+    # "推广" 模块子命令：看当前在投的计划列表（不是历史报表）
+    for key in PROMO_BIZ_CODES:
+        biz, label = PROMO_BIZ_CODES[key]
+        psub = sp.add_parser(f"promo-{key}", help=f"{label}：当前在投计划列表（bizCode={biz}）")
+        psub.add_argument("--limit", type=int, default=10, help="拉多少条 (默认 10)")
+        psub.add_argument("--page", type=int, default=1)
+        psub.add_argument("--status", nargs="+", default=["start", "pause"],
+                          help="过滤状态：start/pause/end (默认 start+pause)")
+        psub.add_argument("--raw", action="store_true")
+        psub.add_argument("--out", help="输出到文件")
+        psub.set_defaults(func=cmd_promo, promo_key=key)
 
     cs = sp.add_parser("charge-summary", help="花费汇总：各营销场景花了多少（关键词推广/人群推广/...）")
     cs.add_argument("--date", default=yesterday, help=f"开始日期 YYYY-MM-DD (默认 {yesterday})")
