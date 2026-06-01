@@ -304,8 +304,7 @@ def cmd_doctor(args: argparse.Namespace) -> None:
         print(f"✓ 读到 {len(cookies)} 个 alimama/taobao 域 cookie")
         for k in ("cookie2", "unb", "_tb_token_", "cna", "sgcookie", "_l_g_", "t", "sg"):
             if k in cookies:
-                v = cookies[k]
-                print(f"✓ {k} = {v[:24]}{'...' if len(v) > 24 else ''}")
+                print(f"✓ {k} = <present>")
         print(f"\nAPI host: {API_HOST}")
         print(f"Referer:  {REFERER_DETAIL_PAGE}")
     except Exception as e:

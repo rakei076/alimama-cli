@@ -89,7 +89,7 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 输出：
 ```
 # 万相台 推广花费汇总
-# 区间: 2026-05-29 ~ 2026-05-29
+# 区间: YYYY-MM-DD ~ YYYY-MM-DD
 场景             花费(元)    占比
 关键词推广     16,969.55  53.6%
 人群推广       14,664.84  46.4%
@@ -211,16 +211,4 @@ MIT — © 2026
 
 ---
 
-## 联系作者
-
-欢迎**有想法、有需求、想加朋友**的人来撩。
-
-- 微信：扫下方二维码加好友
-- X / Twitter：[@LuJia32473](https://x.com/LuJia32473)
-
-<p align="center">
-  <img src="assets/wechat-qr.jpg" alt="WeChat QR" width="240">
-</p>
-
 如果这个工具帮到了你，欢迎给个 ⭐️。
-

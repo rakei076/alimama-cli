@@ -196,7 +196,7 @@ tags:
         "launchPeriodDisplayTime": "18:30-19:00",
         "promotionType": "item",
         "topStatus": true,
-        "gmtCreate": "2026-03-09 15:42:30"
+        "gmtCreate": "YYYY-MM-DD HH:MM:SS"
       }
     ]
   }
