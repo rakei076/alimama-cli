@@ -139,21 +139,21 @@ tags:
 ```json
 {
   "data": {
-    "count": 12,
-    "totalData": {"charge": 1234.56, "alipayInshopAmt": 9876.54, "roi": 8.00},
+    "count": 57,
+    "totalData": {"charge": 1955.55, "alipayInshopAmt": 13923.89, "roi": 7.12},
     "list": [
       {
         "campaignId": 0,
         "promotionName": "<计划名>",
-        "charge": 123.45,
-        "alipayInshopAmt": 1234.56,
-        "roi": 10.00,
-        "click": 456,
-        "ctr": 0.045,
-        "ecpc": 0.27,
-        "cvr": 0.010,
-        "cartRate": 0.050,
-        "alipayInshopNum": 6
+        "charge": 344.25,
+        "alipayInshopAmt": 4107.33,
+        "roi": 11.93,
+        "click": 867,
+        "ctr": 0.044,
+        "ecpc": 0.40,
+        "cvr": 0.012,
+        "cartRate": 0.05,
+        "alipayInshopNum": 8
       }
     ]
   }
@@ -182,18 +182,18 @@ tags:
 ```json
 {
   "data": {
-    "count": 12,
+    "count": 33,
     "list": [
       {
         "campaignId": 0,
         "campaignName": "<计划名>",
         "bizCode": "onebpSearch",
         "displayStatus": "start",
-        "dayBudget": 100.0,
+        "dayBudget": 260.0,
         "bidUnit": "平均点击成本${constraintValue}元",
-        "constraintValue": 0.50,
+        "constraintValue": 0.27,
         "bidTypeV2": "smart_bid",
-        "launchPeriodDisplayTime": "HH:MM-HH:MM",
+        "launchPeriodDisplayTime": "18:30-19:00",
         "promotionType": "item",
         "topStatus": true,
         "gmtCreate": "YYYY-MM-DD HH:MM:SS"
@@ -209,13 +209,21 @@ tags:
 
 ## 安全护栏
 
+**硬约束**（真正的风险信号才停）：
 | 项 | 默认值 | 触发后 |
 |---|---|---|
-| 请求间隔（随机抖动） | 1.8 ~ 3.5 秒 | 自动等待 |
-| 单次最多请求数 | 80 | 超出立即停 |
 | 连续失败次数上限 | 2 | 立即停，**不重试** |
 | 风控关键词 | "滑块/验证码/操作过于频繁/请重新登录" | 抛 RiskTriggered 退出码 2 |
 | 夜禁时段 | 1:00 – 6:00 | 阻止运行；`ALIMAMA_BYPASS_CURFEW=1` 可绕 |
+
+**软建议**（不停止，只 stderr 提示）：
+| 项 | 默认值 | 触发后 |
+|---|---|---|
+| 请求间隔（随机抖动） | 1.8 ~ 3.5 秒 | 自动等待 |
+| 累计请求软警告点 | 200 次 | stderr 提醒一次，**继续运行** |
+| 可选硬上限 | 无（默认不启用）| 设 `ALIMAMA_REQUEST_LIMIT=N` 启用，达到 N 次停 |
+
+**风控按"短时高频"判定，不按总量** — 日常批量拉报表无问题。
 
 **绝不调用任何含 add/create/modify/update/delete/save/batch 的接口**。
 

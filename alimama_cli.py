@@ -47,8 +47,11 @@ RISK_KEYWORDS = ("滑块", "验证码", "操作过于频繁", "请重新登录",
 # 安全护栏
 MIN_DELAY_SEC = 1.8
 MAX_DELAY_SEC = 3.5
-MAX_REQUESTS_PER_RUN = 80
 MAX_CONSECUTIVE_FAILS = 2
+# 请求数策略（建议性，不硬停）：
+#   达到 SOFT_WARN_AT 在 stderr 打一次温和提醒；不停止运行。
+#   如果要兜底（脚本跑飞），设环境变量 ALIMAMA_REQUEST_LIMIT=数字。
+REQUEST_SOFT_WARN_AT = 200
 
 
 class RiskTriggered(RuntimeError):
@@ -133,8 +136,23 @@ def _api_call(
     所有请求 URL 自动带 ?bizCode=universalBP（onebp 全局必填参数）。
     """
     global _request_count, _consecutive_fails
-    if _request_count >= MAX_REQUESTS_PER_RUN:
-        raise RuntimeError(f"单次运行已达 {MAX_REQUESTS_PER_RUN} 次请求上限，自动停止")
+
+    # 软警告：达到阈值在 stderr 提醒一次，不停止
+    if _request_count == REQUEST_SOFT_WARN_AT:
+        print(
+            f"⚠️  已发出 {REQUEST_SOFT_WARN_AT} 次请求 — 大批量正常，但建议留意：风控通常按"
+            f"\"短时高频\"判断而不是\"总量\"，每个请求间隔 1.8~3.5 秒已经足够。继续运行。",
+            file=sys.stderr,
+        )
+    # 可选硬上限（环境变量），默认无
+    hard_limit_env = os.environ.get("ALIMAMA_REQUEST_LIMIT")
+    if hard_limit_env and hard_limit_env.isdigit():
+        hard_limit = int(hard_limit_env)
+        if _request_count >= hard_limit:
+            raise RuntimeError(
+                f"达到自定义硬上限 ALIMAMA_REQUEST_LIMIT={hard_limit}，停止。"
+                f"如要继续：unset ALIMAMA_REQUEST_LIMIT 或调大它。"
+            )
 
     hour = datetime.now().hour
     if 1 <= hour < 6 and not os.environ.get("ALIMAMA_BYPASS_CURFEW"):
