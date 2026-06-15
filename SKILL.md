@@ -1,8 +1,8 @@
 ---
 name: alimama-cli
-description: 万相台 AI 无界（one.alimama.com / 阿里妈妈 onebp）只读数据查询 CLI。给 AI 代理一行命令拉取自家店铺的广告推广数据 — 涵盖"报表"(11 种历史复盘) + "推广"(3 种当前在投计划) + 账户余额 / 营销活动。所有命令只读，永不调用调价/暂停/新建/删除类接口。触发场景：用户提到"万相台/阿里妈妈/广告投放/推广复盘/推广计划/onebp/alimama/广告效果/广告花费/ROI/计划报表/关键词推广/人群推广/货品全站推广/营销场景报表/广告数据/广告诊断"等。
+description: 万相台 AI 无界（one.alimama.com / 阿里妈妈 onebp）数据查询 + 单元关停 CLI。给 AI 代理一行命令拉取自家店铺的广告推广数据 — 涵盖"报表"(11 种历史复盘) + "推广"(3 种当前在投计划) + 单元/商品开关查询 + 账户余额 / 营销活动。查询类全只读；唯一写操作 promo-off（按宝贝ID关停在投单元）默认 dry-run，必须 --execute 才执行。触发场景：用户提到"万相台/阿里妈妈/广告投放/推广复盘/推广计划/onebp/alimama/广告效果/广告花费/ROI/计划报表/关键词推广/人群推广/货品全站推广/营销场景报表/广告数据/广告诊断/关停广告/关掉某商品"等。
 author: rakel
-version: "0.7.0"
+version: "0.8.0"
 tags:
   - taobao
   - alimama
@@ -23,7 +23,7 @@ tags:
 
 ## 适用人群
 
-阿里妈妈广告主自己拉取自家店铺数据。**绝对只读** — 不会调价、不会暂停、不会创建/删除计划。
+阿里妈妈广告主自己拉取自家店铺数据 + 关停广告。**查询类全只读**；**唯一的写操作是 `promo-off`（按宝贝ID关停在投单元），默认只列清单不执行，必须显式 `--execute` 才动**，且不调价/不删除/不新建。
 
 ## 前置条件
 
@@ -51,7 +51,7 @@ tags:
 
 ---
 
-## 全部子命令（21 个）
+## 全部子命令（22 个，含 1 个写操作）
 
 ### 🔧 工具/账户类（5 个）
 
@@ -112,6 +112,7 @@ tags:
 | "计划 XXX 里有哪些商品 / 哪个开哪个关" | `promo-items --campaign XXX` |
 | "宝贝 XXX 散在哪些计划里 / 各自开关" | `promo-units --item XXX`（三种玩法都准，含关键词推广） |
 | "把所有计划的单元拉平成一张表看" | `promo-units`（相当于网页"单元 Tab"） |
+| "把宝贝 XXX 的广告全关了" | ⚠️写：`promo-off --item XXX`（先看 dry-run 清单），确认后 `promo-off --item XXX --execute` |
 | "看哪个人群转化好" | `report-crowd --date X --end-date Y` |
 | "看每个商品的广告效果" | `report-item` |
 | "看哪个城市出单多" | `report-area` |
@@ -245,6 +246,20 @@ tags:
 - 计划级 `adgroupRequired:true` 对关键词推广 **material 恒 null**，且单元巨多（单计划见过 266/1848 总），响应体大易超时 → **单元/商品查询一律用单元级接口**，不要再用 adgroupRequired 取单元。
 - 单请求超时默认 30s（`ALIMAMA_TIMEOUT` 可覆盖）；onebpSearch 服务端偏慢，`fetch_all_adgroups` 用 pageSize=50。
 - `_promo_item()`/`_promo_all_items()`（计划级取单元）仅保留给货品全站/人群的快速取首图场景。
+
+### 写接口：开关单元（`promo-off` 用）
+
+**`POST /adgroup/updatePart.json?csrfId=<X>&bizCode=<biz>`** —— HAR 实测：
+```
+body: {"bizCode":"<biz>","adgroupList":[{"campaignId":<cid>,"adgroupId":<aid>,"displayStatus":"pause"}],"csrfId":"<X>"}
+```
+- `displayStatus`: `"pause"`=关（响应 `onlineStatus:0`） / `"start"`=开（`onlineStatus:1`）
+- `adgroupList` 可一次传多个单元（同 bizCode 批量）
+- 成功标志：响应 `data.errorCount == 0`
+- `loginPointId` / `bx-v` 头：HAR 里有，但同源读接口不带也成 → **判定为可选埋点，CLI 省略**（首次实测确认）
+- 代码：`set_adgroups_status()`；命令 `promo-off`（默认 dry-run，`--execute` 才真发）
+
+**写操作铁律**：`promo-off` 默认只列清单不动；必须 `--execute` 才调写接口；AI 代理执行前必须把清单给用户确认。只关单元(pause)，不调价/不删/不新建。
 
 ---
 

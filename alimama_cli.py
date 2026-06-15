@@ -755,6 +755,33 @@ def _adgroup_unit(ag: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+# ============================ 写操作（需确认后执行） ============================
+# 接口：POST /adgroup/updatePart.json?csrfId=<X>&bizCode=<biz>
+#   body: {"bizCode","adgroupList":[{"campaignId","adgroupId","displayStatus":"pause"|"start"}],"csrfId"}
+#   pause→响应 onlineStatus:0（关）；start→1（开）；成功标志 errorCount:0
+#   (HAR 实测 loginPointId/bx-v 为可选埋点；同一读接口不带也成，故省略)
+
+def set_adgroups_status(biz_code: str, units: list[dict[str, Any]], status: str,
+                        cookies: dict[str, str]) -> dict[str, Any]:
+    """把若干单元(adgroup)批量设为 pause / start。写操作。
+
+    units: 每项含 campaignId / adgroupId。status: "pause" 关 / "start" 开。
+    """
+    if status not in ("pause", "start"):
+        raise ValueError("status 只能是 pause 或 start")
+    csrf = ensure_csrf(cookies)
+    body = {
+        "bizCode": biz_code,
+        "adgroupList": [
+            {"campaignId": u["campaignId"], "adgroupId": u["adgroupId"], "displayStatus": status}
+            for u in units
+        ],
+        "csrfId": csrf,
+    }
+    return _api_call(f"/adgroup/updatePart.json?bizCode={biz_code}",
+                     body, method="POST", cookies=cookies)
+
+
 def fetch_promo_campaigns(*, biz_code: str, page_size: int = 20, offset: int = 0,
                            status_list: list[str] | None = None,
                            adgroup_required: bool = True,
@@ -961,6 +988,64 @@ def cmd_promo_units(args: argparse.Namespace) -> None:
     print("-" * 70)
 
 
+def cmd_promo_off(args: argparse.Namespace) -> None:
+    """按宝贝ID关停：把该商品散落在各计划里、当前【在投】的单元全部 pause。
+
+    ⚠️ 写操作。默认 dry-run（只列清单不执行）；加 --execute 才真正关。
+    """
+    item = str(args.item)
+    biz_keys = [args.biz] if getattr(args, "biz", None) else list(PROMO_BIZ_CODES)
+    cookies = load_alimama_cookies()
+
+    # 收集该商品当前在投(onlineStatus==1)的单元，按玩法分组
+    targets: dict[str, list[dict[str, Any]]] = {}
+    for key in biz_keys:
+        biz_code = PROMO_BIZ_CODES[key][0]
+        for ag in fetch_all_adgroups(biz_code, status_list=["start", "pause"], cookies=cookies):
+            u = _adgroup_unit(ag)
+            if u["itemId"] == item and u["on"]:
+                targets.setdefault(biz_code, []).append(u)
+
+    total = sum(len(v) for v in targets.values())
+    label_of = {b: lbl for b, lbl in PROMO_BIZ_CODES.values()}
+
+    print(f"# 按宝贝ID关停  宝贝 {item}")
+    print(f"# 当前在投(将被关闭)的单元: {total} 个\n")
+    if total == 0:
+        print("没有「在投」状态的单元，无需操作。")
+        return
+
+    print(f"{'玩法':<10}{'计划ID':<14}{'单元ID':<14}计划名")
+    print("-" * 64)
+    for biz_code, units in targets.items():
+        for u in units:
+            print(f"{label_of.get(biz_code, biz_code):<10}{str(u['campaignId']):<14}{str(u['adgroupId']):<14}{(u['campaignName'] or '')[:20]}")
+    print("-" * 64)
+
+    if not args.execute:
+        print(f"\n🔒 DRY-RUN（未执行任何操作）。以上 {total} 个单元将被 pause。")
+        print("   确认无误后，加 --execute 重新运行才会真正关闭。")
+        return
+
+    # ---- 执行（仅在 --execute 时） ----
+    print(f"\n⚡ 执行关停 {total} 个单元 ...")
+    ok = fail = 0
+    for biz_code, units in targets.items():
+        try:
+            resp = set_adgroups_status(biz_code, units, "pause", cookies)
+            err = (resp.get("data") or {}).get("errorCount", -1)
+            if err == 0:
+                ok += len(units)
+                print(f"  ✅ {label_of.get(biz_code)}: {len(units)} 个已关")
+            else:
+                fail += len(units)
+                print(f"  ⚠️ {label_of.get(biz_code)}: errorCount={err}  {json.dumps((resp.get('data') or {}).get('errorDetails'), ensure_ascii=False)[:200]}")
+        except Exception as e:
+            fail += len(units)
+            print(f"  ❌ {label_of.get(biz_code)}: {e}")
+    print(f"\n完成：成功 {ok} / 失败 {fail}")
+
+
 def cmd_charge_summary(args: argparse.Namespace) -> None:
     end = args.end_date or args.date
     data = fetch_charge_summary(start_date=args.date, end_date=end, effect_window=args.window)
@@ -1051,6 +1136,15 @@ def build_parser() -> argparse.ArgumentParser:
     pu.add_argument("--raw", action="store_true")
     pu.add_argument("--out", help="输出到文件")
     pu.set_defaults(func=cmd_promo_units)
+
+    # ⚠️ 写操作：按宝贝ID关停。默认 dry-run，必须 --execute 才真正关。
+    po = sp.add_parser("promo-off", help="⚠️写：按宝贝ID关停该商品所有在投单元（默认dry-run，--execute才执行）")
+    po.add_argument("--item", required=True, help="宝贝ID：关掉这个商品散落在各计划里的全部在投单元")
+    po.add_argument("--biz", choices=list(PROMO_BIZ_CODES.keys()),
+                    help="限定玩法（默认扫全部 3 种）")
+    po.add_argument("--execute", action="store_true",
+                    help="真正执行关停（不加=只列清单不动）")
+    po.set_defaults(func=cmd_promo_off)
 
     cs = sp.add_parser("charge-summary", help="花费汇总：各营销场景花了多少（关键词推广/人群推广/...）")
     cs.add_argument("--date", default=yesterday, help=f"开始日期 YYYY-MM-DD (默认 {yesterday})")
