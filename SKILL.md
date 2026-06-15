@@ -2,7 +2,7 @@
 name: alimama-cli
 description: 万相台 AI 无界（one.alimama.com / 阿里妈妈 onebp）数据查询 + 单元关停 CLI。给 AI 代理一行命令拉取自家店铺的广告推广数据 — 涵盖"报表"(11 种历史复盘) + "推广"(3 种当前在投计划) + 单元/商品开关查询 + 账户余额 / 营销活动。查询类全只读；唯一写操作 promo-off（按宝贝ID关停在投单元）默认 dry-run，必须 --execute 才执行。触发场景：用户提到"万相台/阿里妈妈/广告投放/推广复盘/推广计划/onebp/alimama/广告效果/广告花费/ROI/计划报表/关键词推广/人群推广/货品全站推广/营销场景报表/广告数据/广告诊断/关停广告/关掉某商品"等。
 author: rakel
-version: "0.8.0"
+version: "0.9.0"
 tags:
   - taobao
   - alimama
@@ -51,7 +51,7 @@ tags:
 
 ---
 
-## 全部子命令（22 个，含 1 个写操作）
+## 全部子命令（23 个，含 1 个写操作）
 
 ### 🔧 工具/账户类（5 个）
 
@@ -113,6 +113,7 @@ tags:
 | "宝贝 XXX 散在哪些计划里 / 各自开关" | `promo-units --item XXX`（三种玩法都准，含关键词推广） |
 | "把所有计划的单元拉平成一张表看" | `promo-units`（相当于网页"单元 Tab"） |
 | "把宝贝 XXX 的广告全关了" | ⚠️写：`promo-off --item XXX`（先看 dry-run 清单），确认后 `promo-off --item XXX --execute` |
+| "人群/关键词推广的展现量/点击/花费/ROI 大盘" | `scene-summary [--biz crowd]`（默认过去7天，展现量=adPv） |
 | "看哪个人群转化好" | `report-crowd --date X --end-date Y` |
 | "看每个商品的广告效果" | `report-item` |
 | "看哪个城市出单多" | `report-area` |
@@ -260,6 +261,20 @@ body: {"bizCode":"<biz>","adgroupList":[{"campaignId":<cid>,"adgroupId":<aid>,"d
 - 代码：`set_adgroups_status()`；命令 `promo-off`（默认 dry-run，`--execute` 才真发）
 
 **写操作铁律**：`promo-off` 默认只列清单不动；必须 `--execute` 才调写接口；AI 代理执行前必须把清单给用户确认。只关单元(pause)，不调价/不删/不新建。
+
+### 场景大盘汇总（`scene-summary`）—— 展现量等大盘指标
+
+**展现量字段 = `adPv`**。各推广场景的大盘汇总走 `POST /report/query.json`，**场景过滤靠 URL 的 `?bizCode=<scene>`（body 里的 bizCode 不生效，会返回全账户合计！）**：
+```
+URL : /report/query.json?bizCode=onebpDisplay&csrfId=<X>
+body: {bizCode, byPage:false, fromRealTime:true, startTime, endTime,
+       splitType:"sum", computeType:"sum", sourceList:["scene","adgroup_list"],
+       queryDomains:[], queryFieldIn:[adPv,click,charge,ctr,ecpm,cvr,roi,...]}
+```
+- 实测：人群(onebpDisplay) + 关键词(onebpSearch) 两场景之和 **= 全账户合计**（货品全站该店多暂停≈0）。
+- `fromRealTime:true`=实时归因(与网页一致)；`false`=历史。**昨天数据凌晨可能未出 → 默认查过去7天**。
+- ⚠️ `onebpSite`(货品全站) 的 sum 查询服务端偏慢、常 30s 超时；命令已优雅降级显示 ⚠️。
+- 代码 `fetch_scene_summary()` / `cmd_scene_summary`；命令 `scene-summary [--biz] [--date --end-date] [--no-realtime]`。
 
 ---
 

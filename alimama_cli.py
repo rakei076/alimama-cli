@@ -7,7 +7,8 @@
 - 不开新 profile、不接管浏览器、不需要用户手动操作
 
 接口完全反向工程自万相台 onebp 客户端 JS（onebp/merge bundle）。
-所有命令均为只读 — 永远不调用 add/update/delete/save/close 类接口。
+查询类命令全部只读；唯一写操作 promo-off（按宝贝ID关停在投单元）默认 dry-run，
+必须 --execute 才执行，且只关单元(pause)，不调价/不删除/不新建。
 
 子命令：
     doctor               检查 cookie 与登录态
@@ -614,6 +615,31 @@ PROMO_BIZ_CODES = {
     "crowd":     ("onebpDisplay", "人群推广"),
 }
 
+# 场景大盘汇总（scene-summary）：/report/query.json + splitType=sum，按 URL ?bizCode= 区分场景。
+# 请求全字段（HAR 实测有效），展示挑核心。展现量字段 = adPv。
+SCENE_SUMMARY_REQUEST_FIELDS = [
+    "click", "charge", "ctr", "ecpc", "ecpm", "cvr", "roi",
+    "adPv", "alipayInshopNum", "alipayDirNum", "alipayInshopAmt",
+    "cartInshopNum", "cartRate", "cartCost", "colCartCost",
+    "clickUv", "clickUvCost", "shopVisitUv", "shopVisitUvRate",
+    "firstPurchaseUv", "newAlipayInshopUvRate",
+]
+SCENE_SUMMARY_SHOW = [
+    ("adPv", "展现量", "{:,.0f}"),
+    ("click", "点击量", "{:,.0f}"),
+    ("ctr", "点击率", "{:.2%}"),
+    ("ecpc", "平均点击花费", "¥{:.2f}"),
+    ("ecpm", "千次展现成本", "¥{:.2f}"),
+    ("charge", "花费", "¥{:,.2f}"),
+    ("alipayInshopAmt", "成交金额", "¥{:,.2f}"),
+    ("alipayInshopNum", "成交笔数", "{:,.0f}"),
+    ("roi", "投产比(ROI)", "{:.2f}"),
+    ("cvr", "转化率", "{:.2%}"),
+    ("cartInshopNum", "加购数", "{:,.0f}"),
+    ("cartRate", "加购率", "{:.2%}"),
+    ("clickUv", "点击人数", "{:,.0f}"),
+]
+
 
 def _promo_item(row: dict[str, Any]) -> tuple[str | None, str | None]:
     """从一个计划行里取出 (宝贝ID, 商品标题)。
@@ -1046,6 +1072,74 @@ def cmd_promo_off(args: argparse.Namespace) -> None:
     print(f"\n完成：成功 {ok} / 失败 {fail}")
 
 
+def fetch_scene_summary(biz_code: str, start_date: str, end_date: str, *,
+                        realtime: bool = True, cookies: dict[str, str] | None = None) -> dict[str, Any]:
+    """某推广场景的大盘汇总（展现/点击/花费/成交/ROI…）。
+
+    关键：场景过滤靠 URL 的 ?bizCode=<scene>（body 里的 bizCode 不生效）。
+    splitType=sum 求区间合计。三场景之和 = 全账户合计（实测对得上）。
+    """
+    cookies = cookies or load_alimama_cookies()
+    body = {
+        "bizCode": biz_code, "byPage": False, "fromRealTime": realtime,
+        "startTime": start_date, "endTime": end_date,
+        "splitType": "sum", "computeType": "sum",
+        "sourceList": ["scene", "adgroup_list"], "queryDomains": [],
+        "queryFieldIn": SCENE_SUMMARY_REQUEST_FIELDS,
+    }
+    return _api_call(f"/report/query.json?bizCode={biz_code}", body, method="POST", cookies=cookies)
+
+
+def cmd_scene_summary(args: argparse.Namespace) -> None:
+    """各推广场景大盘汇总（展现量/点击/花费/成交/ROI/加购…）。
+
+    默认看过去 7 天（昨天数据凌晨可能未出，单看昨天易为空）。
+    """
+    biz_keys = [args.biz] if getattr(args, "biz", None) else list(PROMO_BIZ_CODES)
+    cookies = load_alimama_cookies()
+    start, end = args.date, (args.end_date or args.date)
+    realtime = not args.no_realtime
+
+    results = []
+    for key in biz_keys:
+        biz_code, label = PROMO_BIZ_CODES[key]
+        try:
+            d = fetch_scene_summary(biz_code, start, end, realtime=realtime, cookies=cookies)
+        except Exception as e:
+            results.append((key, label, None, str(e)))
+            continue
+        pd = d.get("data") or {}
+        lst = pd.get("list") or []
+        row = lst[0] if lst else {}
+        results.append((key, label, row, None))
+
+    if args.raw or args.out:
+        payload = {"startTime": start, "endTime": end, "realtime": realtime,
+                   "scenes": {k: r for k, _, r, _ in results}}
+        out = json.dumps(payload, ensure_ascii=False, indent=2)
+        if args.out:
+            Path(args.out).write_text(out)
+            print(f"已写入 {args.out}", file=sys.stderr)
+        else:
+            print(out)
+        return
+
+    print(f"# 万相台 推广场景大盘汇总  {start} ~ {end}"
+          + ("（实时归因）" if realtime else "（历史归因）"))
+    print(f"# 展现量=adPv；三场景之和≈全账户\n")
+    for key, label, row, err in results:
+        print(f"━━ {label} ━━")
+        if err:
+            print(f"   ⚠️ {err[:80]}\n"); continue
+        if not row:
+            print("   （该区间无投放数据）\n"); continue
+        for field, name, fmt in SCENE_SUMMARY_SHOW:
+            v = row.get(field)
+            shown = fmt.format(v) if isinstance(v, (int, float)) else "—"
+            print(f"   {name:<8}: {shown}")
+        print()
+
+
 def cmd_charge_summary(args: argparse.Namespace) -> None:
     end = args.end_date or args.date
     data = fetch_charge_summary(start_date=args.date, end_date=end, effect_window=args.window)
@@ -1095,6 +1189,7 @@ def build_parser() -> argparse.ArgumentParser:
     d.set_defaults(func=cmd_doctor)
 
     yesterday = (date.today() - timedelta(days=1)).isoformat()
+    week_ago = (date.today() - timedelta(days=7)).isoformat()
 
     ap = sp.add_parser("api", help="通用接口探测：alimama-cli api /xxx.json [--body JSON] [-p k=v]")
     ap.add_argument("path", help='接口路径，如 "/account/checkRealBalance.json"')
@@ -1145,6 +1240,18 @@ def build_parser() -> argparse.ArgumentParser:
     po.add_argument("--execute", action="store_true",
                     help="真正执行关停（不加=只列清单不动）")
     po.set_defaults(func=cmd_promo_off)
+
+    # 推广场景大盘汇总：展现量/点击/花费/成交/ROI/加购…
+    ss = sp.add_parser("scene-summary", help="各推广场景大盘汇总（展现量/点击/花费/成交/ROI），默认过去7天")
+    ss.add_argument("--biz", choices=list(PROMO_BIZ_CODES.keys()),
+                    help="限定场景 wholesite/keyword/crowd（默认三个都出）")
+    ss.add_argument("--date", default=week_ago, help=f"开始日期 (默认过去7天起 {week_ago})")
+    ss.add_argument("--end-date", default=yesterday, help=f"结束日期 (默认昨天 {yesterday})")
+    ss.add_argument("--no-realtime", action="store_true",
+                    help="用历史归因(默认实时归因，与网页一致)")
+    ss.add_argument("--raw", action="store_true")
+    ss.add_argument("--out", help="输出到文件")
+    ss.set_defaults(func=cmd_scene_summary)
 
     cs = sp.add_parser("charge-summary", help="花费汇总：各营销场景花了多少（关键词推广/人群推广/...）")
     cs.add_argument("--date", default=yesterday, help=f"开始日期 YYYY-MM-DD (默认 {yesterday})")
