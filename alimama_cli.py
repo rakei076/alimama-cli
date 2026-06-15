@@ -48,6 +48,8 @@ RISK_KEYWORDS = ("滑块", "验证码", "操作过于频繁", "请重新登录",
 MIN_DELAY_SEC = 1.8
 MAX_DELAY_SEC = 3.5
 MAX_CONSECUTIVE_FAILS = 2
+# 单请求超时（秒）。万相台 onebpSearch 等接口服务端响应偏慢，默认 30，可用 env 覆盖。
+REQUEST_TIMEOUT = int(os.environ.get("ALIMAMA_TIMEOUT", "30"))
 # 请求数策略（建议性，不硬停）：
 #   达到 SOFT_WARN_AT 在 stderr 打一次温和提醒；不停止运行。
 #   如果要兜底（脚本跑飞），设环境变量 ALIMAMA_REQUEST_LIMIT=数字。
@@ -194,12 +196,12 @@ def _api_call(
             headers["Content-Type"] = "application/json"
             resp = requests.post(
                 url, json=body or {}, cookies=cookies, headers=headers,
-                impersonate="chrome120", timeout=15,
+                impersonate="chrome120", timeout=REQUEST_TIMEOUT,
             )
         else:
             resp = requests.get(
                 url, params=body or {}, cookies=cookies, headers=headers,
-                impersonate="chrome120", timeout=15,
+                impersonate="chrome120", timeout=REQUEST_TIMEOUT,
             )
         _request_count += 1
         if resp.status_code != 200:
@@ -670,8 +672,10 @@ def find_promo_campaign(campaign_id: int, *, biz_code: str | None = None,
     for bc in biz_codes:
         offset, page_size, total = 0, 100, None
         while True:
+            # 只为定位计划拿头部信息，不需要单元（adgroup_required=False 更轻，避免关键词推广超时）
             page = fetch_promo_campaigns(biz_code=bc, page_size=page_size, offset=offset,
-                                         status_list=["start", "pause", "end"], cookies=cookies)
+                                         status_list=["start", "pause", "end"],
+                                         adgroup_required=False, cookies=cookies)
             pd = page.get("data") or {}
             rows = pd.get("list") or []
             total = pd.get("count", 0) if total is None else total
@@ -703,6 +707,52 @@ def fetch_all_promo_campaigns(biz_code: str, *, status_list: list[str] | None = 
         if not rows or offset >= (total or 0):
             break
     return rows_all
+
+
+# 接口：POST /adgroup/horizontal/findPage.json —— 单元级（扁平），三种玩法都直接带 material.materialId
+# 比"计划级 findPage + adgroupRequired"更可靠：关键词推广在计划级里 material 恒为 null，
+# 但单元级接口能正常返回宝贝 ID；且行扁平不嵌套，单元再多也不会超时。
+def fetch_all_adgroups(biz_code: str, *, status_list: list[str] | None = None,
+                       campaign_id: int | None = None,
+                       cookies: dict[str, str] | None = None) -> list[dict[str, Any]]:
+    """翻完所有页，返回某玩法下的全部单元行（每行一个商品广告位）。"""
+    cookies = cookies or load_alimama_cookies()
+    rows_all: list[dict[str, Any]] = []
+    offset, page_size, total = 0, 50, None
+    while True:
+        body: dict[str, Any] = {
+            "bizCode": biz_code,
+            "offset": offset,
+            "pageSize": page_size,
+            "statusList": status_list or ["start", "pause"],
+        }
+        if campaign_id is not None:
+            body["campaignId"] = campaign_id
+        page = _api_call(f"/adgroup/horizontal/findPage.json?bizCode={biz_code}",
+                         body, method="POST", cookies=cookies)
+        pd = page.get("data") or {}
+        rows = pd.get("list") or []
+        total = pd.get("count", 0) if total is None else total
+        rows_all.extend(rows)
+        offset += page_size
+        if not rows or offset >= (total or 0):
+            break
+    return rows_all
+
+
+def _adgroup_unit(ag: dict[str, Any]) -> dict[str, Any]:
+    """从单元级行里抽出统一结构。"""
+    mat = ag.get("material") or {}
+    online = ag.get("onlineStatus")
+    return {
+        "itemId": str(mat.get("materialId")) if mat.get("materialId") else None,
+        "title": mat.get("title") or mat.get("itemTitle") or ag.get("adgroupName"),
+        "on": online == 1,
+        "onlineStatus": online,
+        "campaignId": ag.get("campaignId"),
+        "campaignName": ag.get("campaignName"),
+        "adgroupId": ag.get("adgroupId"),
+    }
 
 
 def fetch_promo_campaigns(*, biz_code: str, page_size: int = 20, offset: int = 0,
@@ -811,27 +861,39 @@ def cmd_promo(args: argparse.Namespace) -> None:
 
 
 def cmd_promo_items(args: argparse.Namespace) -> None:
-    """列出某个计划里的所有商品 + 每个商品的开关状态。"""
-    biz_code = None
-    if getattr(args, "biz", None):
-        biz_code = PROMO_BIZ_CODES[args.biz][0]
-    row, hit_biz = find_promo_campaign(int(args.campaign), biz_code=biz_code)
+    """列出某个计划里的所有商品 + 每个商品的开关状态。
 
-    if row is None:
-        print(f"# 未找到计划 {args.campaign}"
-              + (f"（在 {args.biz} 里）" if args.biz else "（已搜全部推广玩法）"),
+    直接走单元级接口 + campaignId 过滤（三种玩法都准，且绕开偏慢的计划级 findPage）。
+    """
+    cid = int(args.campaign)
+    biz_keys = [args.biz] if getattr(args, "biz", None) else list(PROMO_BIZ_CODES)
+    cookies = load_alimama_cookies()
+
+    ags: list[dict[str, Any]] = []
+    hit_biz: str | None = None
+    for key in biz_keys:
+        biz_code = PROMO_BIZ_CODES[key][0]
+        rows = fetch_all_adgroups(biz_code, campaign_id=cid,
+                                  status_list=["start", "pause", "end"], cookies=cookies)
+        if rows:
+            ags, hit_biz = rows, key
+            break
+
+    if not ags:
+        print(f"# 未找到计划 {cid} 的单元"
+              + (f"（在 {args.biz} 里）" if getattr(args, "biz", None) else "（已搜全部推广玩法）"),
               file=sys.stderr)
         sys.exit(1)
 
-    items = _promo_all_items(row)
-    label = next((lbl for b, lbl in PROMO_BIZ_CODES.values() if b == hit_biz), hit_biz)
+    items = [u for u in (_adgroup_unit(a) for a in ags) if u["itemId"]]
+    label = PROMO_BIZ_CODES[hit_biz][1]
+    cname = ags[0].get("campaignName") or "?"
 
     if args.raw or args.out:
         payload = {
-            "campaignId": row.get("campaignId"),
-            "campaignName": row.get("campaignName"),
-            "bizCode": hit_biz,
-            "displayStatus": row.get("displayStatus"),
+            "campaignId": cid,
+            "campaignName": cname,
+            "bizCode": PROMO_BIZ_CODES[hit_biz][0],
             "itemCount": len(items),
             "items": items,
         }
@@ -843,9 +905,7 @@ def cmd_promo_items(args: argparse.Namespace) -> None:
             print(out)
         return
 
-    cstatus = {"start": "🟢 在投", "pause": "⏸  暂停", "end": "⏹  结束"}.get(
-        row.get("displayStatus"), row.get("displayStatus"))
-    print(f"# {label}  计划 {row.get('campaignId')}「{row.get('campaignName')}」 计划总开关: {cstatus}")
+    print(f"# {label}  计划 {cid}「{cname}」")
     on = sum(1 for it in items if it["on"])
     print(f"# 共 {len(items)} 个商品，开 {on} / 关 {len(items) - on}\n")
     print(f"{'开关':<6}{'宝贝ID':<16}标题")
@@ -853,7 +913,7 @@ def cmd_promo_items(args: argparse.Namespace) -> None:
     for it in sorted(items, key=lambda x: (not x["on"])):
         lab = "🟢 开" if it["on"] else "🔴 关"
         title = it["title"] or "(商品已删除/下架)"
-        print(f"{lab:<6}{it['itemId']:<16}{title[:26]}")
+        print(f"{lab:<6}{str(it['itemId']):<16}{title[:26]}")
     print("-" * 56)
 
 
@@ -867,24 +927,15 @@ def cmd_promo_units(args: argparse.Namespace) -> None:
     item_filter = str(args.item) if getattr(args, "item", None) else None
 
     units: list[dict[str, Any]] = []
-    camp_count = 0
     for key in biz_keys:
         biz_code, _ = PROMO_BIZ_CODES[key]
-        rows = fetch_all_promo_campaigns(biz_code, status_list=args.status, cookies=cookies)
-        camp_count += len(rows)
-        for r in rows:
-            for it in _promo_all_items(r):
-                if item_filter and it["itemId"] != item_filter:
-                    continue
-                units.append({
-                    "biz": key,
-                    "itemId": it["itemId"],
-                    "title": it["title"],
-                    "on": it["on"],
-                    "campaignId": r.get("campaignId"),
-                    "campaignName": r.get("campaignName"),
-                    "adgroupId": it["adgroupId"],
-                })
+        # 单元级接口：三种玩法都直接带 material.materialId（关键词推广也准）
+        for ag in fetch_all_adgroups(biz_code, status_list=args.status, cookies=cookies):
+            u = _adgroup_unit(ag)
+            if item_filter and u["itemId"] != item_filter:
+                continue
+            u["biz"] = key
+            units.append(u)
 
     if args.raw or args.out:
         out = json.dumps({"unitCount": len(units), "units": units}, ensure_ascii=False, indent=2)
@@ -896,17 +947,17 @@ def cmd_promo_units(args: argparse.Namespace) -> None:
         return
 
     on = sum(1 for u in units if u["on"])
-    uniq = len({u["itemId"] for u in units})
+    uniq = len({u["itemId"] for u in units if u["itemId"]})
     scope = PROMO_BIZ_CODES[args.biz][1] if getattr(args, "biz", None) else "全部推广玩法"
-    print(f"# 单元拉平表（{scope}）  扫描计划 {camp_count} 条")
+    print(f"# 单元拉平表（{scope}，来源 /adgroup/horizontal/findPage）")
     if item_filter:
         print(f"# 按宝贝ID过滤: {item_filter}")
     print(f"# 单元 {len(units)} 个 | 开 {on} / 关 {len(units) - on} | 不同商品 {uniq} 个\n")
     print(f"{'开关':<6}{'宝贝ID':<16}{'计划ID':<14}计划名")
     print("-" * 70)
-    for u in sorted(units, key=lambda x: (x["itemId"], not x["on"])):
+    for u in sorted(units, key=lambda x: (x["itemId"] or "", not x["on"])):
         lab = "🟢开" if u["on"] else "🔴关"
-        print(f"{lab:<6}{u['itemId']:<16}{str(u['campaignId']):<14}{(u['campaignName'] or '')[:22]}")
+        print(f"{lab:<6}{str(u['itemId'] or '—'):<16}{str(u['campaignId']):<14}{(u['campaignName'] or '')[:22]}")
     print("-" * 70)
 
 

@@ -2,7 +2,7 @@
 name: alimama-cli
 description: 万相台 AI 无界（one.alimama.com / 阿里妈妈 onebp）只读数据查询 CLI。给 AI 代理一行命令拉取自家店铺的广告推广数据 — 涵盖"报表"(11 种历史复盘) + "推广"(3 种当前在投计划) + 账户余额 / 营销活动。所有命令只读，永不调用调价/暂停/新建/删除类接口。触发场景：用户提到"万相台/阿里妈妈/广告投放/推广复盘/推广计划/onebp/alimama/广告效果/广告花费/ROI/计划报表/关键词推广/人群推广/货品全站推广/营销场景报表/广告数据/广告诊断"等。
 author: rakel
-version: "0.6.0"
+version: "0.7.0"
 tags:
   - taobao
   - alimama
@@ -110,7 +110,7 @@ tags:
 | "看货品全站推广现在的状况" | `promo-wholesite` |
 | "宝贝 XXX 现在在哪个全站/关键词/人群计划里推" | `promo-wholesite --item XXX`（自动翻全部页反查，命中显示计划ID/预算/出价/状态） |
 | "计划 XXX 里有哪些商品 / 哪个开哪个关" | `promo-items --campaign XXX` |
-| "宝贝 XXX 散在哪些计划里 / 各自开关" | `promo-units --item XXX`（⚠️ 仅全站/人群准；关键词推广 material 为空，认不出商品，会漏） |
+| "宝贝 XXX 散在哪些计划里 / 各自开关" | `promo-units --item XXX`（三种玩法都准，含关键词推广） |
 | "把所有计划的单元拉平成一张表看" | `promo-units`（相当于网页"单元 Tab"） |
 | "看哪个人群转化好" | `report-crowd --date X --end-date Y` |
 | "看每个商品的广告效果" | `report-item` |
@@ -228,15 +228,23 @@ tags:
 
 `_promo_item()` 取第一个商品；`_promo_all_items()` 取全部单元 + 开关，供 `promo-items`/`promo-units` 用。CLI 已默认 `adgroupRequired:true`。
 
-**⚠️ 三种玩法结构不一致（实测）：**
+### 单元级接口（推荐用它做单元/商品查询）
 
-| 玩法 | 计划→单元 | 单元.material.materialId | 单元开关 onlineStatus | 备注 |
-|---|---|---|---|---|
-| 货品全站 onebpSite | ✅ | ✅ 有宝贝ID | ✅ | 一计划=一商品 |
-| 人群推广 onebpDisplay | ✅ | ✅ 有宝贝ID | ✅ | 一计划=多商品；同商品常进多计划 |
-| **关键词 onebpSearch** | ✅ | **❌ 恒 null** | ✅ | **认不出商品**；单元数巨大(单计划见过 266)，`adgroupRequired` 响应体大、易超时，必须小 pageSize |
+**`POST /adgroup/horizontal/findPage.json?bizCode=<X>`** —— 扁平单元列表，每行一个商品广告位，**三种玩法都直接返回 `material.materialId`（宝贝ID）+ `material.title` + `onlineStatus` + `campaignId/campaignName`**。
 
-**后果**：`--item` 反查 / `promo-units --item` 目前**只对全站+人群准确**，关键词推广里的同款投放会被漏掉。关键词推广的宝贝 ID 落点尚未定位（material 为空，疑在别处或需另一接口），**做"按商品关停"前必须先补上这块，否则会以为关全了其实没关关键词推广那一份**。
+请求体：`{bizCode, offset, pageSize, statusList:[start,pause,end], campaignId?}`。支持 `campaignId` 服务端过滤（拉单个计划的全部单元）。代码见 `fetch_all_adgroups()` + `_adgroup_unit()`，`promo-units`/`promo-items` 都走它。
+
+**为什么不用"计划级 findPage + adgroupRequired"取单元**（踩过的坑）：
+
+| 玩法 | 计划级嵌套单元 material | 单元级接口 material | 备注 |
+|---|---|---|---|
+| 货品全站 onebpSite | ✅ 有宝贝ID | ✅ | 一计划=一商品 |
+| 人群推广 onebpDisplay | ✅ 有宝贝ID | ✅ | 一计划=多商品；同商品常进多计划 |
+| 关键词 onebpSearch | **❌ 恒 null** | ✅ 有宝贝ID | 计划级认不出商品，**必须走单元级接口** |
+
+- 计划级 `adgroupRequired:true` 对关键词推广 **material 恒 null**，且单元巨多（单计划见过 266/1848 总），响应体大易超时 → **单元/商品查询一律用单元级接口**，不要再用 adgroupRequired 取单元。
+- 单请求超时默认 30s（`ALIMAMA_TIMEOUT` 可覆盖）；onebpSearch 服务端偏慢，`fetch_all_adgroups` 用 pageSize=50。
+- `_promo_item()`/`_promo_all_items()`（计划级取单元）仅保留给货品全站/人群的快速取首图场景。
 
 ---
 
