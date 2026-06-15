@@ -1,50 +1,49 @@
 # alimama-cli
 
-万相台 AI 无界（`one.alimama.com` / 阿里妈妈 onebp）**只读**数据查询 CLI。
+万相台 AI 无界（`one.alimama.com` / 阿里妈妈 onebp）**数据查询 + 单元关停** CLI。
 
-给 AI 代理一行命令拉取自家店铺的广告推广数据 — 不会改/不会调价/不会建删计划。
+给 AI 代理一行命令拉取自家店铺的广告推广数据。**查询类全只读**；唯一写操作 `promo-off`（按宝贝ID关停在投单元）默认只列清单，必须 `--execute` 才执行，不调价/不删除/不新建。
 
 ---
 
-## 万相台 完整模块树（**重要：理解结构再用**）
+## 数据结构：每个推广场景都是「大盘 → 计划 → 商品」三层
+
+三个推广场景（人群 / 关键词 / 货品全站）**结构完全一样**，只是 bizCode 不同。纵向看是三层，每层对应一个命令：
 
 ```
-万相台 AI 无界 (one.alimama.com)
+万相台 · 推广
 │
-├─ 📊【报表】模块 (左侧"基础报表"折叠组) ─ 看历史数据复盘
-│   │   接口：POST /report/query.json (一个接口，rptType 区分)
-│   │   子命令前缀：report-*
-│   │
-│   ├─ 营销场景报表     → charge-summary   (用 /report/chargeSum.json)
-│   ├─ 计划报表         → report-campaign  (rptType=campaign)
-│   ├─ 单元报表         → report-adgroup   (rptType=adgroup)
-│   ├─ 关键词报表       → report-keyword   (rptType=bidword)
-│   ├─ 人群报表         → report-crowd     (rptType=crowd)
-│   ├─ 商品报表         → report-item      (rptType=item_promotion)
-│   ├─ 创意报表         → report-creative  (rptType=creative)
-│   ├─ 地域报表         → report-area      (rptType=area)
-│   ├─ 权益报表         → report-coupon    (rptType=coupon)
-│   ├─ 实时报表         → report-realtime  (rptType=real_time)
-│   └─ 其他推广报表     → report-other     (rptType=other_promotion)
+├─ 👥 人群推广 (onebpDisplay)
+│   ├─ 📊 大盘汇总(大屏) ───────► scene-summary --biz crowd
+│   │      展现量·点击·点击率·花费·成交·ROI·加购·转化   (默认过去7天)
+│   ├─ 📋 计划层 (campaign) ────► promo-crowd        (+ --item 反查宝贝在哪些计划)
+│   │      每条计划: 预算·出价·状态·计划名
+│   │      └─ 🔹 商品/单元层 (adgroup) ──► promo-items --campaign <计划ID>
+│   │             每个商品: 宝贝ID·标题·开关(onlineStatus)   promo-units [--item <宝贝ID>]
+│   │             （一计划多商品；同商品又散在多条计划）
+│   │             └─ ⚙️ 关停 ──► promo-off --item <宝贝ID> [--execute]   ← 唯一写操作
+│   └─ 📈 历史报表(按维度复盘) ─► report-crowd / report-campaign / report-item ...
 │
-├─ 🚀【推广】模块 (左侧"营销场景"折叠组) ─ 看/管"当前在投"的计划
-│   │   接口：POST /campaign/horizontal/findPage.json?bizCode=X
-│   │   子命令前缀：promo-*
-│   │
-│   ├─ 货品全站推广     → promo-wholesite  (bizCode=onebpSite)
-│   ├─ 关键词推广       → promo-keyword    (bizCode=onebpSearch)
-│   ├─ 人群推广         → promo-crowd      (bizCode=onebpDisplay)
-│   ├─ 店铺直选         → ✗ 未做（用户没用这个）
-│   ├─ 内容营销         → ✗ 未做（用户没用这个）
-│   └─ 活动专属/智惠券  → ✗ 未做（活动期才用）
-│
-└─ 🔧 账户/工具类
-    ├─ doctor          ─ 检查 cookie/登录态
-    ├─ account-balance ─ 账户余额
-    ├─ activity-list   ─ 营销活动列表
-    ├─ campaign-list   ─ 推广计划清单（无数据，仅 ID+名字）
-    └─ api <path>      ─ 通用接口探测（debug 用）
+├─ 🔑 关键词推广 (onebpSearch) ── 同三层：scene-summary/promo-keyword/promo-units/report-keyword
+├─ 🛒 货品全站推广 (onebpSite) ── 同三层（特点：一计划=一商品）
+└─ （店铺直选 / 内容营销 / 活动专属：用户没用，未做）
 ```
+
+> **大盘=这个场景的总账；计划=管预算出价；商品=管开关；最底是对单个商品关停。**
+> 大盘三场景之和 = 全账户合计（实测对得上）。
+
+### 📊 报表模块（历史复盘，横切所有场景）
+
+接口 `POST /report/query.json`（一个接口，`rptType` 区分维度）。每个报表含**展现量/花费/成交/ROI/点击/CTR**等：
+
+| 报表 | 命令 | rptType |
+|---|---|---|
+| 营销场景花费 | `charge-summary` | (chargeSum) |
+| 计划 / 单元 / 关键词 / 人群 / 商品 / 创意 / 地域 / 权益 / 实时 / 其他 | `report-campaign` … `report-other` | campaign/adgroup/bidword/crowd/item_promotion/creative/area/coupon/real_time/other |
+
+### 🔧 账户/工具
+
+`doctor`(cookie自检) · `account-balance`(余额) · `activity-list` · `campaign-list` · `api`(通用探测)
 
 ---
 
@@ -160,13 +159,18 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 | `report-coupon` | 📊 报表 | 权益报表 |
 | `report-realtime` | 📊 报表 | 实时报表 |
 | `report-other` | 📊 报表 | 其他推广报表 |
-| `promo-wholesite` | 🚀 推广 | 货品全站推广 - 当前计划 |
-| `promo-keyword` | 🚀 推广 | 关键词推广 - 当前计划 |
-| `promo-crowd` | 🚀 推广 | 人群推广 - 当前计划 |
+| `scene-summary` | 📊 报表 | **场景大盘汇总**：展现量/点击/花费/成交/ROI（`--biz crowd/keyword/wholesite`，默认过去7天）|
+| `promo-wholesite` | 🚀 推广 | 货品全站推广 - 当前计划（+ `--item` 反查）|
+| `promo-keyword` | 🚀 推广 | 关键词推广 - 当前计划（+ `--item` 反查）|
+| `promo-crowd` | 🚀 推广 | 人群推广 - 当前计划（+ `--item` 反查）|
+| `promo-items` | 🚀 推广 | **单计划全部商品 + 各自开关**（`--campaign <计划ID>`）|
+| `promo-units` | 🚀 推广 | **单元拉平表 / 按商品反查散落计划**（`--item <宝贝ID>`）|
+| `promo-off` | ⚙️ **写** | **按宝贝ID关停在投单元**（默认 dry-run，`--execute` 才执行）|
 
 **通用参数**：
 - 报表类：`--date YYYY-MM-DD --end-date YYYY-MM-DD --limit N --window 1|7|15 --raw --out file`
-- 推广类：`--limit N --page N --status start pause --raw --out file`
+- 推广类：`--limit N --page N --status start pause --raw --out file`；`promo-units`/`promo-items` 支持 `--item` / `--campaign`
+- `scene-summary`：`--biz` `--date` `--end-date` `--no-realtime`
 
 ---
 
@@ -188,9 +192,10 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 
 **风控按"短时高频"判定，不按"总量"**，日常批量拉数据没问题。
 
-**只读，不写**：
-- ✅ findPage / findList / report / query / chargeSum / checkRealBalance
-- ❌ add / create / modify / update / delete / save / batch（绝对不调）
+**读写边界**：
+- ✅ 查询全只读：findPage / findList / report / query / chargeSum / checkRealBalance
+- ⚙️ **唯一写操作 `promo-off`**：只调 `/adgroup/updatePart.json` 把单元设 `pause`（关）。默认 dry-run 只列清单；必须 `--execute` 才真发；执行前应把清单给用户确认。
+- ❌ 不调价 / 不删除 / 不新建 / 不批量改预算出价
 
 ---
 

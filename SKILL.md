@@ -2,7 +2,7 @@
 name: alimama-cli
 description: 万相台 AI 无界（one.alimama.com / 阿里妈妈 onebp）数据查询 + 单元关停 CLI。给 AI 代理一行命令拉取自家店铺的广告推广数据 — 涵盖"报表"(11 种历史复盘) + "推广"(3 种当前在投计划) + 单元/商品开关查询 + 账户余额 / 营销活动。查询类全只读；唯一写操作 promo-off（按宝贝ID关停在投单元）默认 dry-run，必须 --execute 才执行。触发场景：用户提到"万相台/阿里妈妈/广告投放/推广复盘/推广计划/onebp/alimama/广告效果/广告花费/ROI/计划报表/关键词推广/人群推广/货品全站推广/营销场景报表/广告数据/广告诊断/关停广告/关掉某商品"等。
 author: rakel
-version: "0.9.0"
+version: "0.10.0"
 tags:
   - taobao
   - alimama
@@ -172,8 +172,8 @@ tags:
 }
 ```
 
-**17 个完整指标 (queryFieldIn)**：
-`charge`(花费) / `click`(点击量) / `ctr`(点击率) / `ecpc`(平均点击花费) / `alipayInshopAmt`(成交金额) / `alipayInshopNum`(成交笔数) / `alipayDirNum`(直接成交单数) / `cartInshopNum`(加购数) / `cvr`(转化率) / `roi`(投产比) / `cartRate`(加购率) / `cartCost`(加购成本) / `colCartCost`(收藏加购成本) / `itemColCartCost`(商品收藏加购成本) / `inshopPotentialUvRate`(潜客率) / `newAlipayInshopUvRate`(新成交客户率)
+**完整指标 (queryFieldIn)**（v0.10 起含 `adPv` 展现量，报表输出已带"展现"列）：
+`adPv`(展现量) / `charge`(花费) / `click`(点击量) / `ctr`(点击率) / `ecpc`(平均点击花费) / `alipayInshopAmt`(成交金额) / `alipayInshopNum`(成交笔数) / `alipayDirNum`(直接成交单数) / `cartInshopNum`(加购数) / `cvr`(转化率) / `roi`(投产比) / `cartRate`(加购率) / `cartCost`(加购成本) / `colCartCost`(收藏加购成本) / `itemColCartCost`(商品收藏加购成本) / `inshopPotentialUvRate`(潜客率) / `newAlipayInshopUvRate`(新成交客户率)
 
 不同 `report-X` 子命令的 row 里**名称字段不同**：
 

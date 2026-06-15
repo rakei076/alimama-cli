@@ -454,6 +454,7 @@ def fetch_charge_summary(*, start_date: str, end_date: str,
 #
 # 完整 17 个指标（queryFieldIn）：
 REPORT_METRICS = {
+    "adPv": "展现量",
     "charge": "花费(元)",
     "click": "点击量",
     "ctr": "点击率",
@@ -563,7 +564,8 @@ def cmd_report(args: argparse.Namespace) -> None:
         amt = float(total_data.get("alipayInshopAmt") or 0)
         roi = float(total_data.get("roi") or 0)
         click = total_data.get("click") or 0
-        print(f"\n  总计: 花费 ¥{charge:,.2f} | 成交 ¥{amt:,.2f} | ROI {roi:.2f} | 点击 {click:,}")
+        adpv = total_data.get("adPv") or 0
+        print(f"\n  总计: 展现 {int(adpv):,} | 花费 ¥{charge:,.2f} | 成交 ¥{amt:,.2f} | ROI {roi:.2f} | 点击 {click:,}")
 
     if not rows:
         print("\n（无明细数据）")
@@ -591,16 +593,17 @@ def cmd_report(args: argparse.Namespace) -> None:
             name_field = cand
             break
 
-    print(f"{'#':<4} {'名称':<28} {'花费':>9} {'成交':>10} {'ROI':>6} {'点击':>6} {'CTR':>6}")
-    print("-" * 80)
+    print(f"{'#':<4} {'名称':<28} {'展现':>9} {'花费':>9} {'成交':>10} {'ROI':>6} {'点击':>6} {'CTR':>6}")
+    print("-" * 90)
     for i, r in enumerate(rows_sorted[:args.limit], 1):
         name = str(r.get(name_field, '?'))[:26] if name_field else '?'
+        adpv = int(r.get("adPv") or 0)
         charge = float(r.get("charge") or 0)
         amt = float(r.get("alipayInshopAmt") or 0)
         roi = float(r.get("roi") or 0)
         click = r.get("click") or 0
         ctr = float(r.get("ctr") or 0)
-        print(f"{i:<4} {name:<28} {charge:>9,.2f} {amt:>10,.2f} {roi:>6.2f} {click:>6} {ctr*100:>5.1f}%")
+        print(f"{i:<4} {name:<28} {adpv:>9,} {charge:>9,.2f} {amt:>10,.2f} {roi:>6.2f} {click:>6} {ctr*100:>5.1f}%")
 
 
 # ---------- "推广"模块（不是"报表"！）—— 当前在投的计划列表 ----------
