@@ -304,7 +304,8 @@ def cmd_doctor(args: argparse.Namespace) -> None:
         print(f"✓ 读到 {len(cookies)} 个 alimama/taobao 域 cookie")
         for k in ("cookie2", "unb", "_tb_token_", "cna", "sgcookie", "_l_g_", "t", "sg"):
             if k in cookies:
-                print(f"✓ {k} = <present>")
+                v = cookies[k]
+                print(f"✓ {k} = {v[:24]}{'...' if len(v) > 24 else ''}")
         print(f"\nAPI host: {API_HOST}")
         print(f"Referer:  {REFERER_DETAIL_PAGE}")
     except Exception as e:
@@ -612,14 +613,112 @@ PROMO_BIZ_CODES = {
 }
 
 
+def _promo_item(row: dict[str, Any]) -> tuple[str | None, str | None]:
+    """从一个计划行里取出 (宝贝ID, 商品标题)。
+
+    货品全站/关键词/人群推广都是"一计划推一个商品"，宝贝 ID 落在
+    adgroupList[0].material.materialId（lastAdgroup.material 兜底）。
+    """
+    for ag_field in ("adgroupList", "lastAdgroup"):
+        ag = row.get(ag_field)
+        if isinstance(ag, dict):
+            ag = [ag]
+        if isinstance(ag, list) and ag:
+            mat = (ag[0] or {}).get("material") or {}
+            mid = mat.get("materialId")
+            if mid:
+                title = mat.get("title") or mat.get("itemTitle")
+                return str(mid), title
+    return None, None
+
+
+def _promo_all_items(row: dict[str, Any]) -> list[dict[str, Any]]:
+    """列出一个计划下的所有商品（单元）及其开关状态。
+
+    每个单元 (adgroup) = 一个商品：
+      material.materialId → 宝贝 ID
+      material.title      → 标题（商品被删除/下架时取不到）
+      onlineStatus        → 开关：1=投放中 / 0=未投放
+    """
+    out: list[dict[str, Any]] = []
+    for ag in (row.get("adgroupList") or []):
+        ag = ag or {}
+        mat = ag.get("material") or {}
+        mid = mat.get("materialId")
+        if not mid:
+            continue
+        online = ag.get("onlineStatus")
+        out.append({
+            "itemId": str(mid),
+            "title": mat.get("title") or mat.get("itemTitle"),
+            "onlineStatus": online,
+            "on": online == 1,
+            "adgroupId": ag.get("adgroupId"),
+        })
+    return out
+
+
+def find_promo_campaign(campaign_id: int, *, biz_code: str | None = None,
+                        cookies: dict[str, str] | None = None) -> tuple[dict[str, Any] | None, str | None]:
+    """按计划 ID 在推广列表里定位某个计划（带单元）。
+
+    biz_code 给定则只搜该玩法，否则依次搜 wholesite/keyword/crowd。
+    返回 (计划行, 命中的 bizCode)；找不到返回 (None, None)。
+    """
+    cookies = cookies or load_alimama_cookies()
+    biz_codes = [biz_code] if biz_code else [b for b, _ in PROMO_BIZ_CODES.values()]
+    for bc in biz_codes:
+        offset, page_size, total = 0, 100, None
+        while True:
+            page = fetch_promo_campaigns(biz_code=bc, page_size=page_size, offset=offset,
+                                         status_list=["start", "pause", "end"], cookies=cookies)
+            pd = page.get("data") or {}
+            rows = pd.get("list") or []
+            total = pd.get("count", 0) if total is None else total
+            for r in rows:
+                if r.get("campaignId") == campaign_id:
+                    return r, bc
+            offset += page_size
+            if not rows or offset >= (total or 0):
+                break
+    return None, None
+
+
+def fetch_all_promo_campaigns(biz_code: str, *, status_list: list[str] | None = None,
+                              cookies: dict[str, str] | None = None) -> list[dict[str, Any]]:
+    """翻完所有页，返回某玩法下的全部计划行（带单元）。"""
+    cookies = cookies or load_alimama_cookies()
+    rows_all: list[dict[str, Any]] = []
+    # 每页 20 而非 100：关键词推广单计划可含数百单元，adgroupRequired 响应体大，
+    # 大 pageSize 会把多条重计划塞进一个响应导致 15s 超时。小页更稳。
+    offset, page_size, total = 0, 20, None
+    while True:
+        page = fetch_promo_campaigns(biz_code=biz_code, page_size=page_size, offset=offset,
+                                     status_list=status_list, cookies=cookies)
+        pd = page.get("data") or {}
+        rows = pd.get("list") or []
+        total = pd.get("count", 0) if total is None else total
+        rows_all.extend(rows)
+        offset += page_size
+        if not rows or offset >= (total or 0):
+            break
+    return rows_all
+
+
 def fetch_promo_campaigns(*, biz_code: str, page_size: int = 20, offset: int = 0,
                            status_list: list[str] | None = None,
+                           adgroup_required: bool = True,
                            cookies: dict[str, str] | None = None) -> dict[str, Any]:
-    """拉某种推广玩法 (bizCode) 下当前的所有计划。"""
+    """拉某种推广玩法 (bizCode) 下当前的所有计划。
+
+    adgroup_required=True 时服务端会回填每个计划的单元 (adgroupList)，
+    其中 material.materialId 即被推广的宝贝 ID、material.title 即商品标题。
+    这是把"宝贝 ID ↔ 计划"对应起来的唯一来源（findPage 顶层 itemId 恒为 null）。
+    """
     cookies = cookies or load_alimama_cookies()
     body = {
         "bizCode": biz_code,
-        "adgroupRequired": False,
+        "adgroupRequired": adgroup_required,
         "offset": offset,
         "pageSize": page_size,
         "statusList": status_list or ["start", "pause"],
@@ -631,11 +730,33 @@ def fetch_promo_campaigns(*, biz_code: str, page_size: int = 20, offset: int = 0
 
 def cmd_promo(args: argparse.Namespace) -> None:
     biz_code, label = PROMO_BIZ_CODES[args.promo_key]
-    data = fetch_promo_campaigns(
-        biz_code=biz_code, page_size=args.limit,
-        offset=(args.page - 1) * args.limit,
-        status_list=args.status,
-    )
+    item_filter = getattr(args, "item", None)
+
+    if item_filter:
+        # 反查模式：宝贝可能在任意一页，自动翻页扫全部计划再过滤
+        cookies = load_alimama_cookies()
+        all_rows: list[dict[str, Any]] = []
+        total = None
+        offset, page_size = 0, 100
+        while True:
+            page = fetch_promo_campaigns(
+                biz_code=biz_code, page_size=page_size, offset=offset,
+                status_list=args.status, cookies=cookies,
+            )
+            pd = page.get("data") or {}
+            batch = pd.get("list") or []
+            total = pd.get("count", 0) if total is None else total
+            all_rows.extend(batch)
+            offset += page_size
+            if not batch or offset >= (total or 0):
+                break
+        data = {"data": {"count": total or len(all_rows), "list": all_rows}}
+    else:
+        data = fetch_promo_campaigns(
+            biz_code=biz_code, page_size=args.limit,
+            offset=(args.page - 1) * args.limit,
+            status_list=args.status,
+        )
     if args.raw or args.out:
         out = json.dumps(data, ensure_ascii=False, indent=2)
         if args.out:
@@ -649,8 +770,16 @@ def cmd_promo(args: argparse.Namespace) -> None:
     rows = d.get("list") or []
     count = d.get("count", 0)
 
+    # 按宝贝 ID 过滤（反查"这个宝贝在哪个计划里推"）
+    item_filter = getattr(args, "item", None)
+    if item_filter:
+        item_filter = str(item_filter)
+        rows = [r for r in rows if _promo_item(r)[0] == item_filter]
+
     print(f"# 万相台 - {label}（bizCode={biz_code}）")
     print(f"# 当前共 {count} 个计划，本页 {len(rows)}")
+    if item_filter:
+        print(f"# 按宝贝ID过滤: {item_filter}（命中 {len(rows)} 个计划）")
     if args.status != ["start", "pause"]:
         print(f"# 过滤状态: {args.status}")
     print()
@@ -670,12 +799,115 @@ def cmd_promo(args: argparse.Namespace) -> None:
         period = r.get("launchPeriodDisplayTime") or "全天"
         ptype = r.get("promotionType") or "—"
         ctime = (r.get("gmtCreate") or "—")[:10]
+        item_id, item_title = _promo_item(r)
 
         print(f"[{i:>2}] {is_top}{status_label}  campaignId={cid}")
         print(f"     计划名: {name}")
+        if item_id:
+            print(f"     宝贝ID: {item_id}  {(item_title or '')[:30]}")
         print(f"     日预算: ¥{budget:<8,.0f}  出价: {bid_unit:<25}  类型: {bid_type}")
         print(f"     投放时段: {period:<15}  推广类型: {ptype:<6}  创建: {ctime}")
         print()
+
+
+def cmd_promo_items(args: argparse.Namespace) -> None:
+    """列出某个计划里的所有商品 + 每个商品的开关状态。"""
+    biz_code = None
+    if getattr(args, "biz", None):
+        biz_code = PROMO_BIZ_CODES[args.biz][0]
+    row, hit_biz = find_promo_campaign(int(args.campaign), biz_code=biz_code)
+
+    if row is None:
+        print(f"# 未找到计划 {args.campaign}"
+              + (f"（在 {args.biz} 里）" if args.biz else "（已搜全部推广玩法）"),
+              file=sys.stderr)
+        sys.exit(1)
+
+    items = _promo_all_items(row)
+    label = next((lbl for b, lbl in PROMO_BIZ_CODES.values() if b == hit_biz), hit_biz)
+
+    if args.raw or args.out:
+        payload = {
+            "campaignId": row.get("campaignId"),
+            "campaignName": row.get("campaignName"),
+            "bizCode": hit_biz,
+            "displayStatus": row.get("displayStatus"),
+            "itemCount": len(items),
+            "items": items,
+        }
+        out = json.dumps(payload, ensure_ascii=False, indent=2)
+        if args.out:
+            Path(args.out).write_text(out)
+            print(f"已写入 {args.out}", file=sys.stderr)
+        else:
+            print(out)
+        return
+
+    cstatus = {"start": "🟢 在投", "pause": "⏸  暂停", "end": "⏹  结束"}.get(
+        row.get("displayStatus"), row.get("displayStatus"))
+    print(f"# {label}  计划 {row.get('campaignId')}「{row.get('campaignName')}」 计划总开关: {cstatus}")
+    on = sum(1 for it in items if it["on"])
+    print(f"# 共 {len(items)} 个商品，开 {on} / 关 {len(items) - on}\n")
+    print(f"{'开关':<6}{'宝贝ID':<16}标题")
+    print("-" * 56)
+    for it in sorted(items, key=lambda x: (not x["on"])):
+        lab = "🟢 开" if it["on"] else "🔴 关"
+        title = it["title"] or "(商品已删除/下架)"
+        print(f"{lab:<6}{it['itemId']:<16}{title[:26]}")
+    print("-" * 56)
+
+
+def cmd_promo_units(args: argparse.Namespace) -> None:
+    """把某玩法（或全部玩法）下所有计划的单元拉平成一张表。
+
+    相当于网页"单元 Tab"。--item 反查某商品散落在哪些计划里、各自开关。
+    """
+    biz_keys = [args.biz] if getattr(args, "biz", None) else list(PROMO_BIZ_CODES)
+    cookies = load_alimama_cookies()
+    item_filter = str(args.item) if getattr(args, "item", None) else None
+
+    units: list[dict[str, Any]] = []
+    camp_count = 0
+    for key in biz_keys:
+        biz_code, _ = PROMO_BIZ_CODES[key]
+        rows = fetch_all_promo_campaigns(biz_code, status_list=args.status, cookies=cookies)
+        camp_count += len(rows)
+        for r in rows:
+            for it in _promo_all_items(r):
+                if item_filter and it["itemId"] != item_filter:
+                    continue
+                units.append({
+                    "biz": key,
+                    "itemId": it["itemId"],
+                    "title": it["title"],
+                    "on": it["on"],
+                    "campaignId": r.get("campaignId"),
+                    "campaignName": r.get("campaignName"),
+                    "adgroupId": it["adgroupId"],
+                })
+
+    if args.raw or args.out:
+        out = json.dumps({"unitCount": len(units), "units": units}, ensure_ascii=False, indent=2)
+        if args.out:
+            Path(args.out).write_text(out)
+            print(f"已写入 {args.out}", file=sys.stderr)
+        else:
+            print(out)
+        return
+
+    on = sum(1 for u in units if u["on"])
+    uniq = len({u["itemId"] for u in units})
+    scope = PROMO_BIZ_CODES[args.biz][1] if getattr(args, "biz", None) else "全部推广玩法"
+    print(f"# 单元拉平表（{scope}）  扫描计划 {camp_count} 条")
+    if item_filter:
+        print(f"# 按宝贝ID过滤: {item_filter}")
+    print(f"# 单元 {len(units)} 个 | 开 {on} / 关 {len(units) - on} | 不同商品 {uniq} 个\n")
+    print(f"{'开关':<6}{'宝贝ID':<16}{'计划ID':<14}计划名")
+    print("-" * 70)
+    for u in sorted(units, key=lambda x: (x["itemId"], not x["on"])):
+        lab = "🟢开" if u["on"] else "🔴关"
+        print(f"{lab:<6}{u['itemId']:<16}{str(u['campaignId']):<14}{(u['campaignName'] or '')[:22]}")
+    print("-" * 70)
 
 
 def cmd_charge_summary(args: argparse.Namespace) -> None:
@@ -744,9 +976,30 @@ def build_parser() -> argparse.ArgumentParser:
         psub.add_argument("--page", type=int, default=1)
         psub.add_argument("--status", nargs="+", default=["start", "pause"],
                           help="过滤状态：start/pause/end (默认 start+pause)")
+        psub.add_argument("--item", help="按宝贝ID反查：只显示推广该商品的计划（自动翻全部页）")
         psub.add_argument("--raw", action="store_true")
         psub.add_argument("--out", help="输出到文件")
         psub.set_defaults(func=cmd_promo, promo_key=key)
+
+    # 单个计划里的所有商品 + 开关状态（测款计划这类一计划多商品时用）
+    pi = sp.add_parser("promo-items", help="列出某计划里的全部商品及开/关状态：promo-items --campaign <计划ID>")
+    pi.add_argument("--campaign", required=True, help="计划 ID (campaignId)")
+    pi.add_argument("--biz", choices=list(PROMO_BIZ_CODES.keys()),
+                    help="限定推广玩法 wholesite/keyword/crowd（默认自动搜全部）")
+    pi.add_argument("--raw", action="store_true")
+    pi.add_argument("--out", help="输出到文件")
+    pi.set_defaults(func=cmd_promo_items)
+
+    # 单元拉平表（网页"单元 Tab"）：所有计划的全部单元一张表
+    pu = sp.add_parser("promo-units", help="单元拉平表：所有计划的全部单元(=商品广告位)一张表；--item 反查某商品在哪些计划")
+    pu.add_argument("--biz", choices=list(PROMO_BIZ_CODES.keys()),
+                    help="限定玩法 wholesite/keyword/crowd（默认扫全部 3 种）")
+    pu.add_argument("--item", help="按宝贝ID过滤：只看这个商品散落在哪些计划、各自开关")
+    pu.add_argument("--status", nargs="+", default=["start", "pause"],
+                    help="计划状态过滤 start/pause/end（默认 start+pause）")
+    pu.add_argument("--raw", action="store_true")
+    pu.add_argument("--out", help="输出到文件")
+    pu.set_defaults(func=cmd_promo_units)
 
     cs = sp.add_parser("charge-summary", help="花费汇总：各营销场景花了多少（关键词推广/人群推广/...）")
     cs.add_argument("--date", default=yesterday, help=f"开始日期 YYYY-MM-DD (默认 {yesterday})")

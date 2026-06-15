@@ -2,7 +2,7 @@
 name: alimama-cli
 description: 万相台 AI 无界（one.alimama.com / 阿里妈妈 onebp）只读数据查询 CLI。给 AI 代理一行命令拉取自家店铺的广告推广数据 — 涵盖"报表"(11 种历史复盘) + "推广"(3 种当前在投计划) + 账户余额 / 营销活动。所有命令只读，永不调用调价/暂停/新建/删除类接口。触发场景：用户提到"万相台/阿里妈妈/广告投放/推广复盘/推广计划/onebp/alimama/广告效果/广告花费/ROI/计划报表/关键词推广/人群推广/货品全站推广/营销场景报表/广告数据/广告诊断"等。
 author: rakel
-version: "0.3.0"
+version: "0.6.0"
 tags:
   - taobao
   - alimama
@@ -51,7 +51,7 @@ tags:
 
 ---
 
-## 全部子命令（19 个）
+## 全部子命令（21 个）
 
 ### 🔧 工具/账户类（5 个）
 
@@ -91,6 +91,12 @@ tags:
 | `promo-keyword` | onebpSearch | 关键词推广 - 当前在跑哪些计划 |
 | `promo-crowd` | onebpDisplay | 人群推广 - 当前在跑哪些计划 |
 
+`promo-*` 还支持 `--item <宝贝ID>` 反查（这宝贝在哪个计划里推）。
+
+**`promo-items --campaign <计划ID>`**：列出**一个计划里的全部商品 + 每个商品的开/关状态**（测款计划这类"一计划多商品"必用）。`--biz` 可限定玩法，默认自动搜全部。开关取自单元的 `onlineStatus`（1=开/0=关）；标题为"商品已删除/下架"=广告开着但宝贝没了，该清理。
+
+**`promo-units`**：把所有计划的**全部单元(=商品广告位)拉平成一张表**，相当于网页的"单元 Tab"。`--biz` 限定玩法（默认扫全部 3 种）；`--item <宝贝ID>` 反查**某商品散落在哪些计划、各自开关**（这是"关掉某商品全部投放"的前置视图——一个商品常进多条计划，每条算一个独立单元各有开关）。
+
 ---
 
 ## AI 代理决策指南（用户说什么 → 调用什么）
@@ -102,6 +108,10 @@ tags:
 | "哪些关键词在浪费钱" | `report-keyword --date X --raw` 然后 jq 过滤 `charge>5 and alipayInshopAmt==0` |
 | "现在关键词推广有多少计划在跑" | `promo-keyword` |
 | "看货品全站推广现在的状况" | `promo-wholesite` |
+| "宝贝 XXX 现在在哪个全站/关键词/人群计划里推" | `promo-wholesite --item XXX`（自动翻全部页反查，命中显示计划ID/预算/出价/状态） |
+| "计划 XXX 里有哪些商品 / 哪个开哪个关" | `promo-items --campaign XXX` |
+| "宝贝 XXX 散在哪些计划里 / 各自开关" | `promo-units --item XXX`（⚠️ 仅全站/人群准；关键词推广 material 为空，认不出商品，会漏） |
+| "把所有计划的单元拉平成一张表看" | `promo-units`（相当于网页"单元 Tab"） |
 | "看哪个人群转化好" | `report-crowd --date X --end-date Y` |
 | "看每个商品的广告效果" | `report-item` |
 | "看哪个城市出单多" | `report-area` |
@@ -196,7 +206,7 @@ tags:
         "launchPeriodDisplayTime": "18:30-19:00",
         "promotionType": "item",
         "topStatus": true,
-        "gmtCreate": "YYYY-MM-DD HH:MM:SS"
+        "gmtCreate": "2026-03-09 15:42:30"
       }
     ]
   }
@@ -204,6 +214,29 @@ tags:
 ```
 
 判定状态：`displayStatus == "start"` 在投，`"pause"` 暂停。
+
+### 宝贝 ID ↔ 计划 的对应（反查关键情报）
+
+`findPage` 顶层的 `itemId` / `itemIdList` / `scopeItems` **恒为 null**，网页上能看到宝贝 ID 是因为请求体带了 `adgroupRequired:true`，服务端才回填单元：
+
+```
+计划行.adgroupList[]              → 该计划下的所有单元（一计划可含多个单元）
+计划行.adgroupList[i].material.materialId  → 宝贝 ID（lastAdgroup.material 兜底）
+计划行.adgroupList[i].material.title       → 商品标题（被删/下架时为 null）
+计划行.adgroupList[i].onlineStatus         → 单元开关：1=投放中 / 0=未投放
+```
+
+`_promo_item()` 取第一个商品；`_promo_all_items()` 取全部单元 + 开关，供 `promo-items`/`promo-units` 用。CLI 已默认 `adgroupRequired:true`。
+
+**⚠️ 三种玩法结构不一致（实测）：**
+
+| 玩法 | 计划→单元 | 单元.material.materialId | 单元开关 onlineStatus | 备注 |
+|---|---|---|---|---|
+| 货品全站 onebpSite | ✅ | ✅ 有宝贝ID | ✅ | 一计划=一商品 |
+| 人群推广 onebpDisplay | ✅ | ✅ 有宝贝ID | ✅ | 一计划=多商品；同商品常进多计划 |
+| **关键词 onebpSearch** | ✅ | **❌ 恒 null** | ✅ | **认不出商品**；单元数巨大(单计划见过 266)，`adgroupRequired` 响应体大、易超时，必须小 pageSize |
+
+**后果**：`--item` 反查 / `promo-units --item` 目前**只对全站+人群准确**，关键词推广里的同款投放会被漏掉。关键词推广的宝贝 ID 落点尚未定位（material 为空，疑在别处或需另一接口），**做"按商品关停"前必须先补上这块，否则会以为关全了其实没关关键词推广那一份**。
 
 ---
 
