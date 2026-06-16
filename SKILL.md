@@ -134,9 +134,9 @@ tags:
 ```json
 {
   "data": {
-    "totalCharge": 31634.39,
-    "searchCharge": 16969.55,
-    "displayCharge": 14664.84,
+    "totalCharge": 12345.67,
+    "searchCharge": 6789.01,
+    "displayCharge": 5556.66,
     "contentSceneCharge": 0,
     "activitySceneCharge": 0,
     "crowdSceneCharge": 0,
@@ -154,20 +154,20 @@ tags:
 {
   "data": {
     "count": 57,
-    "totalData": {"charge": 1955.55, "alipayInshopAmt": 13923.89, "roi": 7.12},
+    "totalData": {"charge": 1234.56, "alipayInshopAmt": 8888.88, "roi": 7.20},
     "list": [
       {
         "campaignId": 0,
         "promotionName": "<计划名>",
-        "charge": 344.25,
-        "alipayInshopAmt": 4107.33,
-        "roi": 11.93,
-        "click": 867,
-        "ctr": 0.044,
-        "ecpc": 0.40,
-        "cvr": 0.012,
+        "charge": 100.00,
+        "alipayInshopAmt": 1000.00,
+        "roi": 10.00,
+        "click": 200,
+        "ctr": 0.040,
+        "ecpc": 0.50,
+        "cvr": 0.010,
         "cartRate": 0.05,
-        "alipayInshopNum": 8
+        "alipayInshopNum": 5
       }
     ]
   }
