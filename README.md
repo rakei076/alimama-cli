@@ -19,7 +19,7 @@
 │   ├─ 📋 计划层 (campaign) ────► promo-crowd        (+ --item 反查宝贝在哪些计划)
 │   │      每条计划: 预算·出价·状态·计划名
 │   │      └─ 🔹 商品/单元层 (adgroup) ──► promo-items --campaign <计划ID>
-│   │             每个商品: 宝贝ID·标题·开关(onlineStatus)   promo-units [--item <宝贝ID>]
+│   │             每个商品: 宝贝ID·标题·开关(onlineStatus)   promo-units [--item <宝贝ID> | --unit <单元ID>]
 │   │             （一计划多商品；同商品又散在多条计划）
 │   │             └─ ⚙️ 关停 ──► promo-off --item <宝贝ID> [--execute]   ← 唯一写操作
 │   └─ 📈 历史报表(按维度复盘) ─► report-crowd / report-campaign / report-item ...
@@ -164,12 +164,12 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 | `promo-keyword` | 🚀 推广 | 关键词推广 - 当前计划（+ `--item` 反查）|
 | `promo-crowd` | 🚀 推广 | 人群推广 - 当前计划（+ `--item` 反查）|
 | `promo-items` | 🚀 推广 | **单计划全部商品 + 各自开关**（`--campaign <计划ID>`）|
-| `promo-units` | 🚀 推广 | **单元拉平表 / 按商品反查散落计划**（`--item <宝贝ID>`）|
+| `promo-units` | 🚀 推广 | **单元拉平表 / 按商品反查 / 按单元ID定位**（`--item <宝贝ID>`、`--unit <单元ID>`，均服务端过滤）|
 | `promo-off` | ⚙️ **写** | **按宝贝ID关停在投单元**（默认 dry-run，`--execute` 才执行）|
 
 **通用参数**：
 - 报表类：`--date YYYY-MM-DD --end-date YYYY-MM-DD --limit N --window 1|7|15 --raw --out file`
-- 推广类：`--limit N --page N --status start pause --raw --out file`；`promo-units`/`promo-items` 支持 `--item` / `--campaign`
+- 推广类：`--limit N --page N --status start pause --raw --out file`；`promo-units` 支持 `--item`(宝贝ID) / `--unit`(单元ID)，`promo-items` 支持 `--campaign`（这些 ID 过滤都走服务端，不全量拉）
 - `scene-summary`：`--biz` `--date` `--end-date` `--no-realtime`
 
 ---

@@ -743,8 +743,17 @@ def fetch_all_promo_campaigns(biz_code: str, *, status_list: list[str] | None = 
 # 但单元级接口能正常返回宝贝 ID；且行扁平不嵌套，单元再多也不会超时。
 def fetch_all_adgroups(biz_code: str, *, status_list: list[str] | None = None,
                        campaign_id: int | None = None,
+                       item_id: int | str | None = None,
+                       adgroup_id: int | str | None = None,
                        cookies: dict[str, str] | None = None) -> list[dict[str, Any]]:
-    """翻完所有页，返回某玩法下的全部单元行（每行一个商品广告位）。"""
+    """翻完所有页，返回某玩法下的全部单元行（每行一个商品广告位）。
+
+    服务端过滤（强烈优先用，别再全量拉回客户端筛）：
+    - campaign_id：只取某计划下的单元
+    - item_id：只取某宝贝ID的单元（实测返回该商品散落各计划的全部单元，对关停安全）
+    - adgroup_id：精确定位某个单元ID
+    三者均为服务端过滤，命中后通常一页内返回完。
+    """
     cookies = cookies or load_alimama_cookies()
     rows_all: list[dict[str, Any]] = []
     offset, page_size, total = 0, 50, None
@@ -757,6 +766,10 @@ def fetch_all_adgroups(biz_code: str, *, status_list: list[str] | None = None,
         }
         if campaign_id is not None:
             body["campaignId"] = campaign_id
+        if item_id is not None:
+            body["itemId"] = int(item_id)
+        if adgroup_id is not None:
+            body["adgroupId"] = int(adgroup_id)
         page = _api_call(f"/adgroup/horizontal/findPage.json?bizCode={biz_code}",
                          body, method="POST", cookies=cookies)
         pd = page.get("data") or {}
@@ -976,22 +989,33 @@ def cmd_promo_items(args: argparse.Namespace) -> None:
 def cmd_promo_units(args: argparse.Namespace) -> None:
     """把某玩法（或全部玩法）下所有计划的单元拉平成一张表。
 
-    相当于网页"单元 Tab"。--item 反查某商品散落在哪些计划里、各自开关。
+    相当于网页"单元 Tab"。
+    --item 反查某商品散落在哪些计划里、各自开关（服务端按 itemId 过滤，不全量拉）。
+    --unit 精确定位某个单元ID（服务端按 adgroupId 过滤，命中即停）。
     """
     biz_keys = [args.biz] if getattr(args, "biz", None) else list(PROMO_BIZ_CODES)
     cookies = load_alimama_cookies()
     item_filter = str(args.item) if getattr(args, "item", None) else None
+    unit_filter = str(args.unit) if getattr(args, "unit", None) else None
+    # 精确按ID查时，状态放宽到含 end，避免漏掉已结束的单元
+    status_list = args.status
+    if (item_filter or unit_filter) and status_list == ["start", "pause"]:
+        status_list = ["start", "pause", "end"]
 
     units: list[dict[str, Any]] = []
     for key in biz_keys:
         biz_code, _ = PROMO_BIZ_CODES[key]
         # 单元级接口：三种玩法都直接带 material.materialId（关键词推广也准）
-        for ag in fetch_all_adgroups(biz_code, status_list=args.status, cookies=cookies):
+        # itemId / adgroupId 走服务端过滤，命中即停，不再全量拉回客户端筛
+        rows = fetch_all_adgroups(biz_code, status_list=status_list,
+                                  item_id=item_filter, adgroup_id=unit_filter,
+                                  cookies=cookies)
+        for ag in rows:
             u = _adgroup_unit(ag)
-            if item_filter and u["itemId"] != item_filter:
-                continue
             u["biz"] = key
             units.append(u)
+        if unit_filter and units:
+            break  # 单元ID全局唯一，命中后无需再扫其余玩法
 
     if args.raw or args.out:
         out = json.dumps({"unitCount": len(units), "units": units}, ensure_ascii=False, indent=2)
@@ -1006,8 +1030,10 @@ def cmd_promo_units(args: argparse.Namespace) -> None:
     uniq = len({u["itemId"] for u in units if u["itemId"]})
     scope = PROMO_BIZ_CODES[args.biz][1] if getattr(args, "biz", None) else "全部推广玩法"
     print(f"# 单元拉平表（{scope}，来源 /adgroup/horizontal/findPage）")
+    if unit_filter:
+        print(f"# 按单元ID过滤(服务端): {unit_filter}")
     if item_filter:
-        print(f"# 按宝贝ID过滤: {item_filter}")
+        print(f"# 按宝贝ID过滤(服务端): {item_filter}")
     print(f"# 单元 {len(units)} 个 | 开 {on} / 关 {len(units) - on} | 不同商品 {uniq} 个\n")
     print(f"{'开关':<6}{'宝贝ID':<16}{'计划ID':<14}计划名")
     print("-" * 70)
@@ -1027,10 +1053,12 @@ def cmd_promo_off(args: argparse.Namespace) -> None:
     cookies = load_alimama_cookies()
 
     # 收集该商品当前在投(onlineStatus==1)的单元，按玩法分组
+    # 服务端按 itemId 过滤（实测返回该商品在各计划的全部单元），不再全量拉
     targets: dict[str, list[dict[str, Any]]] = {}
     for key in biz_keys:
         biz_code = PROMO_BIZ_CODES[key][0]
-        for ag in fetch_all_adgroups(biz_code, status_list=["start", "pause"], cookies=cookies):
+        for ag in fetch_all_adgroups(biz_code, status_list=["start", "pause"],
+                                     item_id=item, cookies=cookies):
             u = _adgroup_unit(ag)
             if u["itemId"] == item and u["on"]:
                 targets.setdefault(biz_code, []).append(u)
@@ -1228,7 +1256,8 @@ def build_parser() -> argparse.ArgumentParser:
     pu = sp.add_parser("promo-units", help="单元拉平表：所有计划的全部单元(=商品广告位)一张表；--item 反查某商品在哪些计划")
     pu.add_argument("--biz", choices=list(PROMO_BIZ_CODES.keys()),
                     help="限定玩法 wholesite/keyword/crowd（默认扫全部 3 种）")
-    pu.add_argument("--item", help="按宝贝ID过滤：只看这个商品散落在哪些计划、各自开关")
+    pu.add_argument("--item", help="按宝贝ID过滤(服务端)：只看这个商品散落在哪些计划、各自开关")
+    pu.add_argument("--unit", help="按单元ID精确定位(服务端 adgroupId 过滤，命中即停)")
     pu.add_argument("--status", nargs="+", default=["start", "pause"],
                     help="计划状态过滤 start/pause/end（默认 start+pause）")
     pu.add_argument("--raw", action="store_true")

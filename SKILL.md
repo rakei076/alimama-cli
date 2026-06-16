@@ -2,7 +2,7 @@
 name: alimama-cli
 description: 万相台 AI 无界（one.alimama.com / 阿里妈妈 onebp）数据查询 + 单元关停 CLI。给 AI 代理一行命令拉取自家店铺的广告推广数据 — 涵盖"报表"(11 种历史复盘) + "推广"(3 种当前在投计划) + 单元/商品开关查询 + 账户余额 / 营销活动。查询类全只读；唯一写操作 promo-off（按宝贝ID关停在投单元）默认 dry-run，必须 --execute 才执行。触发场景：用户提到"万相台/阿里妈妈/广告投放/推广复盘/推广计划/onebp/alimama/广告效果/广告花费/ROI/计划报表/关键词推广/人群推广/货品全站推广/营销场景报表/广告数据/广告诊断/关停广告/关掉某商品"等。
 author: rakel
-version: "0.10.0"
+version: "0.11.0"
 tags:
   - taobao
   - alimama
@@ -96,7 +96,7 @@ tags:
 
 **`promo-items --campaign <计划ID>`**：列出**一个计划里的全部商品 + 每个商品的开/关状态**（测款计划这类"一计划多商品"必用）。`--biz` 可限定玩法，默认自动搜全部。开关取自单元的 `onlineStatus`（1=开/0=关）；标题为"商品已删除/下架"=广告开着但宝贝没了，该清理。
 
-**`promo-units`**：把所有计划的**全部单元(=商品广告位)拉平成一张表**，相当于网页的"单元 Tab"。`--biz` 限定玩法（默认扫全部 3 种）；`--item <宝贝ID>` 反查**某商品散落在哪些计划、各自开关**（这是"关掉某商品全部投放"的前置视图——一个商品常进多条计划，每条算一个独立单元各有开关）。
+**`promo-units`**：把所有计划的**全部单元(=商品广告位)拉平成一张表**，相当于网页的"单元 Tab"。`--biz` 限定玩法（默认扫全部 3 种）；`--item <宝贝ID>` 反查**某商品散落在哪些计划、各自开关**（这是"关掉某商品全部投放"的前置视图——一个商品常进多条计划，每条算一个独立单元各有开关）；`--unit <单元ID>` 按单元ID精确定位一条单元。**`--item` 和 `--unit` 都走服务端过滤（不全量拉回来再筛），命中即停。**
 
 ---
 
@@ -111,7 +111,8 @@ tags:
 | "看货品全站推广现在的状况" | `promo-wholesite` |
 | "宝贝 XXX 现在在哪个全站/关键词/人群计划里推" | `promo-wholesite --item XXX`（自动翻全部页反查，命中显示计划ID/预算/出价/状态） |
 | "计划 XXX 里有哪些商品 / 哪个开哪个关" | `promo-items --campaign XXX` |
-| "宝贝 XXX 散在哪些计划里 / 各自开关" | `promo-units --item XXX`（三种玩法都准，含关键词推广） |
+| "宝贝 XXX 散在哪些计划里 / 各自开关" | `promo-units --item XXX`（服务端过滤；三种玩法都准，含关键词推广） |
+| "单元 XXX 是什么 / 看某个单元ID的信息" | `promo-units --unit XXX`（服务端精确定位，命中即停） |
 | "把所有计划的单元拉平成一张表看" | `promo-units`（相当于网页"单元 Tab"） |
 | "把宝贝 XXX 的广告全关了" | ⚠️写：`promo-off --item XXX`（先看 dry-run 清单），确认后 `promo-off --item XXX --execute` |
 | "人群/关键词推广的展现量/点击/花费/ROI 大盘" | `scene-summary [--biz crowd]`（默认过去7天，展现量=adPv） |
@@ -235,7 +236,16 @@ tags:
 
 **`POST /adgroup/horizontal/findPage.json?bizCode=<X>`** —— 扁平单元列表，每行一个商品广告位，**三种玩法都直接返回 `material.materialId`（宝贝ID）+ `material.title` + `onlineStatus` + `campaignId/campaignName`**。
 
-请求体：`{bizCode, offset, pageSize, statusList:[start,pause,end], campaignId?}`。支持 `campaignId` 服务端过滤（拉单个计划的全部单元）。代码见 `fetch_all_adgroups()` + `_adgroup_unit()`，`promo-units`/`promo-items` 都走它。
+请求体：`{bizCode, offset, pageSize, statusList:[start,pause,end], campaignId?, itemId?, adgroupId?}`。代码见 `fetch_all_adgroups()` + `_adgroup_unit()`，`promo-units`/`promo-items`/`promo-off` 都走它。
+
+**三个服务端过滤参数（默认优先用，别再全量拉回客户端筛）**：
+| body 参数 | 作用 | 实测 |
+|---|---|---|
+| `campaignId` | 只取某计划下的单元 | `promo-items` 用 |
+| `itemId`（数字）| 只取某宝贝ID的单元 | **返回该商品散落各计划的全部单元**（验过 1 商品命中 15 单元），对 `promo-off` 关停安全；`promo-units --item`/`promo-off` 用 |
+| `adgroupId`（数字）| 精确定位某个单元ID | count=1 命中即停；`promo-units --unit` 用 |
+
+> ⚠️ 工作准则：**有 ID（计划/宝贝/单元）就走服务端过滤，命中即停；不要把全量(关键词单元上千)拉回客户端再 filter**——慢且易超时。仅当用户要"全表"才不带过滤。
 
 **为什么不用"计划级 findPage + adgroupRequired"取单元**（踩过的坑）：
 
