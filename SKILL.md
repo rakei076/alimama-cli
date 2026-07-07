@@ -9,10 +9,9 @@ tags:
   - advertising
   - ecommerce
   - cli
-  - readonly
 ---
 
-# alimama-cli — 万相台 AI 无界 只读数据查询 CLI
+# alimama-cli — 万相台 AI 无界 数据查询 + 单元关停 CLI
 
 ## 一句话上手
 
