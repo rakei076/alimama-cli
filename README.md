@@ -1,8 +1,19 @@
 # alimama-cli
 
+![License](https://img.shields.io/github/license/rakei076/alimama-cli)
+![Python](https://img.shields.io/badge/python-3.10%2B-blue)
+![Stars](https://img.shields.io/github/stars/rakei076/alimama-cli?style=social)
+![Last Commit](https://img.shields.io/github/last-commit/rakei076/alimama-cli)
+
 万相台 AI 无界（`one.alimama.com` / 阿里妈妈 onebp）**数据查询 + 单元关停** CLI。
 
 给 AI 代理一行命令拉取自家店铺的广告推广数据。**查询类全只读**；唯一写操作 `promo-off`（按宝贝ID关停在投单元）默认只列清单，必须 `--execute` 才执行，不调价/不删除/不新建。
+
+---
+
+> 💡 顺手推荐：自己做了一个电商模特图生成站 [paitumao.com](https://paitumao.com)，
+> 用的是目前最强的模特图生成模型，image-2 定价 ¥0.5/张，专门服务预算有限的小商家。
+> 有需要的话加我微信聊，备注一下来意。
 
 ---
 
@@ -228,3 +239,9 @@ MIT — © 2026
 </p>
 
 如果这个工具帮到了你，欢迎给个 ⭐️。
+
+---
+
+## Star History
+
+[![Star History Chart](https://api.star-history.com/svg?repos=rakei076/alimama-cli&type=Date)](https://star-history.com/#rakei076/alimama-cli&Date)
