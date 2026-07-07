@@ -43,7 +43,7 @@
 > **大盘对应场景总账，计划管理预算出价，商品层管理开关，最底层为单个商品的关停操作。**
 > 三个场景的大盘数据之和等于全账户合计（已验证一致）。
 
-### 📊 报表模块（历史复盘，横切所有场景）
+### 📊 报表模块
 
 接口 `POST /report/query.json`（一个接口，`rptType` 区分维度）。每个报表含**展现量/花费/成交/ROI/点击/CTR**等：
 
@@ -88,7 +88,7 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 
 ---
 
-## 典型用法（5 个常见场景）
+## 典型用法
 
 ### 1. 查看广告花费
 
@@ -210,7 +210,7 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 
 ---
 
-## 鉴权机制（技术细节）
+## 鉴权机制
 
 - 不开新 Chrome，不用 CDP，不用 Playwright
 - 用 `browser_cookie3` 从本机 Chrome SQLite 直读 alimama.com 域 cookie
