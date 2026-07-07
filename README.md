@@ -11,7 +11,7 @@
 
 ---
 
-> 💡 顺手推荐：自己做了一个电商模特图生成站 [paitumao.com](https://paitumao.com)，
+> 💡 推荐：自己做了一个电商模特图生成站 [paitumao.com](https://paitumao.com)，
 > 用的是目前最强的模特图生成模型，image-2 定价 ¥0.5/张，专门服务预算有限的小商家。
 > 有需要的话加我微信聊，备注一下来意。
 
@@ -37,11 +37,11 @@
 │
 ├─ 🔑 关键词推广 (onebpSearch) ── 同三层：scene-summary/promo-keyword/promo-units/report-keyword
 ├─ 🛒 货品全站推广 (onebpSite) ── 同三层（特点：一计划=一商品）
-└─ （店铺直选 / 内容营销 / 活动专属：用户没用，未做）
+└─ （店铺直选 / 内容营销 / 活动专属：暂未支持）
 ```
 
-> **大盘=这个场景的总账；计划=管预算出价；商品=管开关；最底是对单个商品关停。**
-> 大盘三场景之和 = 全账户合计（实测对得上）。
+> **大盘对应场景总账，计划管理预算出价，商品层管理开关，最底层为单个商品的关停操作。**
+> 三个场景的大盘数据之和等于全账户合计（已验证一致）。
 
 ### 📊 报表模块（历史复盘，横切所有场景）
 
@@ -58,19 +58,19 @@
 
 ---
 
-## "报表" vs "推广" 怎么区分？（别再搞混）
+## "报表" 与 "推广" 的区别
 
 | 维度 | 📊 报表 | 🚀 推广 |
 |---|---|---|
-| 时间 | **历史数据** | **当前快照** |
-| 关心 | "昨天/上周花了多少、ROI 多少、哪个关键词转化好" | "我现在哪些计划在跑、出价多少、日预算多少" |
-| 例子 | "上周关键词推广花了 ¥X,XXX" | "现在关键词推广 N 个计划都在跑，最大日预算 ¥XXX" |
-| 接口 | `/report/query.json` (有时间窗口参数) | `/campaign/horizontal/findPage.json` (无日期，看当前) |
-| 操作类型 | 看数 | 看配置 |
+| 时间范围 | **历史数据** | **当前快照** |
+| 关注点 | 昨天/上周花费、ROI、关键词转化情况 | 当前在跑的计划、出价、日预算 |
+| 示例 | "上周关键词推广花了 ¥X,XXX" | "当前关键词推广有 N 个计划在跑，最大日预算 ¥XXX" |
+| 接口 | `/report/query.json`（含时间窗口参数） | `/campaign/horizontal/findPage.json`（无日期，查当前状态） |
+| 操作类型 | 查看数据 | 查看配置 |
 
-**你日常的两件事**：
-1. 早上看报表 → 昨天花了多少 ROI 多少
-2. 看推广列表 → 哪些计划现在在跑，哪个该调
+**典型使用场景**：
+1. 查看昨日报表，了解花费与 ROI
+2. 查看当前推广列表，判断计划是否需要调整
 
 ---
 
@@ -88,9 +88,9 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 
 ---
 
-## 典型用法（5 个最高频的）
+## 典型用法（5 个常见场景）
 
-### 1. 早上看广告花了多少（最常用）
+### 1. 查看广告花费
 
 ```bash
 ~/.claude/skills/alimama-cli/scripts/alimama.sh charge-summary
@@ -106,7 +106,7 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 总花费         XX,XXX.XX 100.0%
 ```
 
-### 2. 看哪些计划在赚钱、哪些在赔钱
+### 2. 查看各计划的投入产出比
 
 ```bash
 ~/.claude/skills/alimama-cli/scripts/alimama.sh report-campaign --limit 20
@@ -120,7 +120,7 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 10 <计划 J 名字>              ¥XX    ¥0       0.00    XX   X.X%   🔴
 ```
 
-### 3. 看现在关键词推广有哪些计划在跑
+### 3. 查看当前在投的关键词推广计划
 
 ```bash
 ~/.claude/skills/alimama-cli/scripts/alimama.sh promo-keyword --limit 10
@@ -135,14 +135,14 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 ...
 ```
 
-### 4. 看哪个关键词花得多但不出单（要砍）
+### 4. 筛选高花费无转化的关键词
 
 ```bash
 ~/.claude/skills/alimama-cli/scripts/alimama.sh report-keyword --limit 50 --raw \
   | jq '[.data.list[] | select(.charge > 5 and .alipayInshopAmt == 0)]'
 ```
 
-### 5. 看货品全站推广在投商品
+### 5. 查看货品全站推广在投商品
 
 ```bash
 ~/.claude/skills/alimama-cli/scripts/alimama.sh promo-wholesite --limit 20
