@@ -84,7 +84,15 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 ~/.claude/skills/alimama-cli/scripts/alimama.sh doctor
 ```
 
-前置条件：本机 Chrome 已登录 one.alimama.com（CLI 自动复用浏览器 cookie，不需要重新登录）。
+前置条件：macOS 本机 Chrome 已登录 one.alimama.com；Windows 首次运行会自动打开一个专用 Chrome/Edge 窗口，只需登录一次，后续自动复用。
+
+Windows 可直接运行：
+
+```bat
+scripts\alimama.cmd doctor
+```
+
+启动脚本会优先使用 `uv`；否则使用 Python 3，并在首次运行时自动安装缺少的依赖。
 
 ---
 
@@ -212,8 +220,10 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 
 ## 鉴权机制
 
-- 不开新 Chrome，不用 CDP，不用 Playwright
-- 用 `browser_cookie3` 从本机 Chrome SQLite 直读 alimama.com 域 cookie
+- macOS：用 `browser_cookie3` 从本机 Chrome SQLite 直读 alimama.com 域 cookie
+- Windows：自动启动独立 Profile 的 Chrome/Edge，通过本机 CDP 读取由浏览器解密后的 cookie，兼容新版 Chrome App-Bound Encryption
+- Windows 首次登录后保存专用 Profile；以后命令自动连接现有浏览器，或在浏览器关闭后自动重新启动
+- 不导出、不粘贴 cookie，不关闭 Chrome 安全保护，也不接管用户的默认浏览器 Profile
 - 用 `curl_cffi` 伪 TLS 指纹（impersonate=chrome120）
 - 万相台需要 CSRF：CLI 启动时自动 POST `/member/checkAccess.json` 拿 csrfId 缓存
 - 所有 POST 自动注入 `?bizCode=universalBP&csrfId=xxx`

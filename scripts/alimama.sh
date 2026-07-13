@@ -8,9 +8,9 @@ SKILL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 # 优先用 uv，没装再 fallback 到 python3 + pip
 if command -v uv >/dev/null 2>&1; then
-  exec uv run --with browser-cookie3 --with curl-cffi python "$SKILL_DIR/alimama_cli.py" "$@"
+  exec uv run --with browser-cookie3 --with curl-cffi --with websocket-client python "$SKILL_DIR/alimama_cli.py" "$@"
 elif command -v python3 >/dev/null 2>&1; then
-  python3 -c "import browser_cookie3, curl_cffi" 2>/dev/null || {
+  python3 -c "import browser_cookie3, curl_cffi, websocket" 2>/dev/null || {
     echo "缺依赖。安装：pip install -r $SKILL_DIR/requirements.txt" >&2
     exit 1
   }

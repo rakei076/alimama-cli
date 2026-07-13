@@ -2,7 +2,7 @@
 name: alimama-cli
 description: 万相台 AI 无界（one.alimama.com / 阿里妈妈 onebp）数据查询 + 单元关停 CLI。给 AI 代理一行命令拉取自家店铺的广告推广数据 — 涵盖"报表"(11 种历史复盘) + "推广"(3 种当前在投计划) + 单元/商品开关查询 + 账户余额 / 营销活动。查询类全只读；唯一写操作 promo-off（按宝贝ID关停在投单元）默认 dry-run，必须 --execute 才执行。触发场景：用户提到"万相台/阿里妈妈/广告投放/推广复盘/推广计划/onebp/alimama/广告效果/广告花费/ROI/计划报表/关键词推广/人群推广/货品全站推广/营销场景报表/广告数据/广告诊断/关停广告/关掉某商品"等。
 author: rakel
-version: "0.11.0"
+version: "0.12.0"
 tags:
   - taobao
   - alimama
@@ -27,8 +27,8 @@ tags:
 ## 前置条件
 
 - macOS（已测试），Linux/Windows 理论可用
-- 本地 Chrome **已登录** https://one.alimama.com
-- 已装 `uv`（推荐）或 `pip install browser-cookie3 curl-cffi`
+- macOS Chrome **已登录** https://one.alimama.com；Windows 首次运行会自动打开专用浏览器，登录一次即可
+- 已装 `uv`（推荐）或 `pip install -r requirements.txt`
 
 ---
 
@@ -343,6 +343,9 @@ DATE=$(date -v-1d +%Y-%m-%d)
 | 现象 | 原因 | 处理 |
 |---|---|---|
 | `doctor` 报"未找到 alimama 登录态" | Chrome 没登录 one.alimama.com | 去 Chrome 打开 one.alimama.com 一次 |
+| Windows 首次运行打开 Chrome/Edge | 正在创建 CLI 专用登录环境 | 登录一次，CLI 会自动检测并继续；以后无需重复登录 |
+| Windows 等待登录超时 | 5 分钟内没有完成登录 | 保留浏览器窗口，登录后重新运行；可用 `ALIMAMA_LOGIN_TIMEOUT` 调整秒数 |
+| Windows 找不到浏览器 | Chrome/Edge 未安装在常规位置 | 设置 `ALIMAMA_BROWSER_PATH` 指向 `chrome.exe` 或 `msedge.exe` |
 | 任意子命令返回 list:[] 但 count > 0 | 缺关键参数（如 orderBy） | CLI 已内置正确参数，正常不会遇到 |
 | `RiskTriggered: 滑块` | 触发风控 | **立即停 24 小时**，不要重试 |
 | HTTP 5810 / "需要登录" | session 超时 | 去 Chrome 重新打开 one.alimama.com |
@@ -353,7 +356,7 @@ DATE=$(date -v-1d +%Y-%m-%d)
 来自 `https://g.alicdn.com/mm/onebp/<version>/onebp/merge.js` 和实际 HAR 抓包。
 
 **统一鉴权**：
-- Cookie 从本机 Chrome 直读
+- macOS Cookie 从本机 Chrome 直读；Windows 从 CLI 专用 Chrome/Edge 的 CDP 读取
 - 所有 POST 自动注入 URL `?bizCode=universalBP&csrfId=xxx`
 - csrfId 启动时一次性 `POST /member/checkAccess.json` 拿，进程内缓存
 - **无动态 sign，无 WASM 加密**（跟 sycm 同档简单）
