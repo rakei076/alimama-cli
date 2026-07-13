@@ -346,6 +346,7 @@ DATE=$(date -v-1d +%Y-%m-%d)
 | Windows 首次运行打开 Chrome/Edge | 正在创建 CLI 专用登录环境 | 登录一次，CLI 会自动检测并继续；以后无需重复登录 |
 | Windows 等待登录超时 | 5 分钟内没有完成登录 | 保留浏览器窗口，登录后重新运行；可用 `ALIMAMA_LOGIN_TIMEOUT` 调整秒数 |
 | Windows 找不到浏览器 | Chrome/Edge 未安装在常规位置 | 设置 `ALIMAMA_BROWSER_PATH` 指向 `chrome.exe` 或 `msedge.exe` |
+| Windows 报 `AppData\Roaming\uv\python: 拒绝访问` | AI 沙箱只允许访问工作区 | 更新 CLI 后运行 `scripts\alimama.cmd doctor`；新版会把 Python、依赖和登录 Profile 放在项目内 |
 | 任意子命令返回 list:[] 但 count > 0 | 缺关键参数（如 orderBy） | CLI 已内置正确参数，正常不会遇到 |
 | `RiskTriggered: 滑块` | 触发风控 | **立即停 24 小时**，不要重试 |
 | HTTP 5810 / "需要登录" | session 超时 | 去 Chrome 重新打开 one.alimama.com |
@@ -357,6 +358,7 @@ DATE=$(date -v-1d +%Y-%m-%d)
 
 **统一鉴权**：
 - macOS Cookie 从本机 Chrome 直读；Windows 从 CLI 专用 Chrome/Edge 的 CDP 读取
+- Windows 的 `.runtime/` 包含登录 Profile，已被 Git 忽略；不要提交、打包或分享
 - 所有 POST 自动注入 URL `?bizCode=universalBP&csrfId=xxx`
 - csrfId 启动时一次性 `POST /member/checkAccess.json` 拿，进程内缓存
 - **无动态 sign，无 WASM 加密**（跟 sycm 同档简单）

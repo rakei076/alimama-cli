@@ -92,7 +92,11 @@ Windows 可直接运行：
 scripts\alimama.cmd doctor
 ```
 
-启动脚本会优先使用 `uv`；否则使用 Python 3，并在首次运行时自动安装缺少的依赖。
+启动脚本会优先使用 `uv`；否则使用 Python 3，并在首次运行时自动安装缺少的依赖。Windows 下 Python、依赖缓存和专用浏览器 Profile 都保存在项目内的隐藏目录，因此也能在只允许访问工作区的 Codex/AI 沙箱中运行。
+
+> `.runtime/` 含登录后的专用浏览器 Profile。它已加入 `.gitignore`，请勿提交、打包或分享该目录。
+
+如果旧版本在受限环境中报 `AppData\Roaming\uv\python: 拒绝访问`，更新后重新运行 `scripts\alimama.cmd doctor` 即可。
 
 ---
 
