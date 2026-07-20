@@ -195,6 +195,17 @@ scripts\alimama.cmd doctor
 - 推广类：`--limit N --page N --status start pause --raw --out file`；`promo-units` 支持 `--item`(宝贝ID) / `--unit`(单元ID)，`promo-items` 支持 `--campaign`（这些 ID 过滤都走服务端，不全量拉）
 - `scene-summary`：`--biz` `--date` `--end-date` `--no-realtime`
 
+网络错误和 HTTP 5xx 默认最多重试 2 次；可用 `ALIMAMA_RETRIES=N` 调整。业务错误会返回非零退出码。
+
+**取数主力走字段字典。** 仓库根目录 [`fields.json`](fields.json) 是机器可读字段字典（字段码 → 中文名 / 适用命令 / 口径备注），AI 先查字典再用 `--fields` 选列取数，遇到字典没有的字段有一套「三招」发现方法论（网页表头 DOM 藏字段码 / `queryFieldIn` 试探 / 网页数值对照）自己去查。这部分是给机器看的操作规范，写在 [SKILL.md](SKILL.md) 的「字段字典与发现方法论」一节，README 不重复。
+
+```bash
+# 只取想要的列，未知字段码可直接透传做试探
+~/.claude/skills/alimama-cli/scripts/alimama.sh report-keyword --fields charge,roi,alipayInshopUv --date 2026-07-13 --end-date 2026-07-19
+```
+
+**指定 Chrome profile**：登录态不在 Default 身份时，设 `ALIMAMA_CHROME_PROFILE="Profile 1"` 再跑。
+
 ---
 
 ## 安全护栏

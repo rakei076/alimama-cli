@@ -70,6 +70,7 @@ tags:
 |---|---|---|
 | `charge-summary` | 营销场景报表 | **总览**：各推广场景（关键词推广/人群推广）各花了多少 |
 | `scene-summary` | 场景大盘(大屏) | **某场景大盘汇总**：展现量(adPv)/点击/花费/成交/ROI/加购/转化，默认过去7天，`--biz` 选场景 |
+| `scene-daily` | 营销场景报表→分日详情 | **某场景按天**的展现/点击/花费/点击率/成交额/笔数/转化率/ROI 时序（含合计行），默认过去7天，`--biz` 选场景，`--window 1\|7\|15` 转化窗口 |
 | `report-campaign` | 计划报表 | 按"每个推广计划"看花费 + ROI |
 | `report-adgroup` | 单元报表 | 按"计划下的单元"看 |
 | `report-keyword` | 关键词报表 | 按"每个关键词"看，找高 ROI 词加价/低 ROI 词砍 |
@@ -115,6 +116,7 @@ tags:
 | "把所有计划的单元拉平成一张表看" | `promo-units`（相当于网页"单元 Tab"） |
 | "把宝贝 XXX 的广告全关了" | ⚠️写：`promo-off --item XXX`（先看 dry-run 清单），确认后 `promo-off --item XXX --execute` |
 | "人群/关键词推广的展现量/点击/花费/ROI 大盘" | `scene-summary [--biz crowd]`（默认过去7天，展现量=adPv） |
+| "关键词推广这几天每天花费/ROI 怎么走的" / "某场景分日趋势" | `scene-daily --biz keyword --date X --end-date Y`（按天时序 + 合计行） |
 | "看哪个人群转化好" | `report-crowd --date X --end-date Y` |
 | "看每个商品的广告效果" | `report-item` |
 | "看哪个城市出单多" | `report-area` |
@@ -285,6 +287,36 @@ body: {bizCode, byPage:false, fromRealTime:true, startTime, endTime,
 - `fromRealTime:true`=实时归因(与网页一致)；`false`=历史。**昨天数据凌晨可能未出 → 默认查过去7天**。
 - ⚠️ `onebpSite`(货品全站) 的 sum 查询服务端偏慢、常 30s 超时；命令已优雅降级显示 ⚠️。
 - 代码 `fetch_scene_summary()` / `cmd_scene_summary`；命令 `scene-summary [--biz] [--date --end-date] [--no-realtime]`。
+
+---
+
+## 字段字典与发现方法论（v0.12+，AI 取数主力走这里）
+
+**主力不是背命令，是查字典。** 仓库根目录 `fields.json` 是机器可读字段字典，每条 = `字段码 → {cn 中文名, scope 适用命令, fmt 格式, status, note 口径备注}`。
+
+**标准取数动线：**
+1. **先读 `fields.json`** 找到要的字段码 + 它的 `note`（口径警告）
+2. **用 `--fields` 选列取数**：`report-keyword --fields charge,roi,alipayInshopUv --date X --end-date Y`；想要字典里某命令的全部字段用 `--all-fields`
+3. 预设命令（`charge-summary`/`scene-summary` 等）只是常用查询的快捷方式，不是唯一入口
+
+`status: candidate` 的字段中文名尚未破译，用前先验证；`note` 里的口径警告**必须遵守**（见下方坑规矩）。
+
+### 发现方法论三招（字典里没有的字段，按成本从低到高）
+
+1. **翻响应自带元数据**：部分接口响应自带字段码+中文名，`--raw` 拉一次全收（sycm 侧 `data.columns` 是典范）。
+2. **`queryFieldIn` 试探**：把候选字段码塞进 `--fields` 发请求 —— 返回带值=接口认，没返回=不认，**试错零损失**。万相台报表接口就是"你报字段名、有就发货"的点单式接口。
+3. **网页对照**：登录网页找到目标指标，两条路——(a) 表头 DOM 的 `mx-stickytable-drag` 属性**直接写着字段码**（2026-07-20 用它破了 `naturalPayAmt` 自然流量转化金额 / `orgNaturalPv` 自然流量曝光量）；(b) 拿网页显示数值当答案纸，`--raw` 全量拉回后按数值反查字段码。
+
+### 写回规矩（越用字典越厚）
+
+三招探出新字段并**实测核准后**，必须以 `status: verified` 写回 `fields.json`，`note` 附验证日期与方法；试探失败的候选也记一笔（`status: rejected` + note），防后人重复踩。**`fields.json` 永不含真实数值/店名**，可进公共库。
+
+### 坑规矩（口径警告，写数前必看）
+
+- **自然流量两列**（`naturalPayAmt`/`orgNaturalPv`）：**T-2 之前的日期才可信**，最新 1-2 天恒为 0（归因未完成）。
+- **单日成交/ROI 归因未完成会偏低**：复盘查 7 天+区间（`scene-summary`/`scene-daily` 默认已 14 天）。
+
+> 配套工具：**sycm-cli**（生意参谋店铺数据体检）同样有 `fields.json` 字典 + 三招方法论，广告×自然流量交叉复盘两个一起用。
 
 ---
 

@@ -58,6 +58,8 @@ MAX_DELAY_SEC = 3.5
 MAX_CONSECUTIVE_FAILS = 2
 # 单请求超时（秒）。万相台 onebpSearch 等接口服务端响应偏慢，默认 30，可用 env 覆盖。
 REQUEST_TIMEOUT = int(os.environ.get("ALIMAMA_TIMEOUT", "30"))
+MAX_RETRIES = int(os.environ.get("ALIMAMA_RETRIES", "2"))
+RETRY_BASE_SEC = float(os.environ.get("ALIMAMA_RETRY_BASE_SEC", "1"))
 # 请求数策略（建议性，不硬停）：
 #   达到 SOFT_WARN_AT 在 stderr 打一次温和提醒；不停止运行。
 #   如果要兜底（脚本跑飞），设环境变量 ALIMAMA_REQUEST_LIMIT=数字。
@@ -236,6 +238,16 @@ def _windows_cdp_cookies() -> dict[str, str]:
     return _wait_for_windows_login(port, marker_file)
 
 
+def _chrome_cookie_file() -> str | None:
+    """若设了 ALIMAMA_CHROME_PROFILE（如 "Profile 1"），返回该 Chrome 身份的 Cookies 文件路径；
+    未设则返回 None，browser_cookie3 走默认身份不变。"""
+    prof = os.environ.get("ALIMAMA_CHROME_PROFILE")
+    if not prof:
+        return None
+    p = Path.home() / "Library/Application Support/Google/Chrome" / prof / "Cookies"
+    return str(p)
+
+
 def load_alimama_cookies() -> dict[str, str]:
     """从 Chrome 读取 alimama.com 域所有 cookies。
 
@@ -245,7 +257,7 @@ def load_alimama_cookies() -> dict[str, str]:
     if platform.system() == "Windows":
         return _windows_cdp_cookies()
 
-    jar = browser_cookie3.chrome(domain_name="alimama.com")
+    jar = browser_cookie3.chrome(domain_name="alimama.com", cookie_file=_chrome_cookie_file())
     cookies: dict[str, str] = {}
     # 优先级：one.alimama.com > .alimama.com > 其他子域
     # 通过两遍写入：先非 one，再 one，让 one 覆盖
@@ -259,6 +271,7 @@ def load_alimama_cookies() -> dict[str, str]:
     if not _has_login_cookie(cookies):
         raise RuntimeError(
             "未找到阿里妈妈登录态。请在 Chrome 里打开并登录 https://one.alimama.com 后重试。"
+            '若登录态在别的 Chrome 身份，设 ALIMAMA_CHROME_PROFILE="Profile 1" 重试。'
         )
     return cookies
 
@@ -272,6 +285,16 @@ def _check_risk(text: str) -> None:
 _request_count = 0
 _consecutive_fails = 0
 _csrf_id: str | None = None  # 由 ensure_csrf() 注入
+
+
+def _validate_business_response(payload: dict[str, Any]) -> None:
+    info = payload.get("info")
+    if not isinstance(info, dict):
+        return
+    if info.get("ok") is False or info.get("errorCode"):
+        raise RuntimeError(
+            f"万相台业务失败 errorCode={info.get('errorCode')}: {info.get('message') or ''}"
+        )
 
 
 def ensure_csrf(cookies: dict[str, str]) -> str:
@@ -366,39 +389,48 @@ def _api_call(
     headers["Sec-Fetch-Dest"] = "empty"
     headers["X-Requested-With"] = "XMLHttpRequest"
 
-    try:
-        if method.upper() == "POST":
-            headers["Content-Type"] = "application/json"
-            resp = requests.post(
-                url, json=body or {}, cookies=cookies, headers=headers,
-                impersonate="chrome120", timeout=REQUEST_TIMEOUT,
-            )
-        else:
-            resp = requests.get(
-                url, params=body or {}, cookies=cookies, headers=headers,
-                impersonate="chrome120", timeout=REQUEST_TIMEOUT,
-            )
-        _request_count += 1
+    last_error: Exception | None = None
+    for attempt in range(MAX_RETRIES + 1):
+        try:
+            if method.upper() == "POST":
+                headers["Content-Type"] = "application/json"
+                resp = requests.post(
+                    url, json=body or {}, cookies=cookies, headers=headers,
+                    impersonate="chrome120", timeout=REQUEST_TIMEOUT,
+                )
+            else:
+                resp = requests.get(
+                    url, params=body or {}, cookies=cookies, headers=headers,
+                    impersonate="chrome120", timeout=REQUEST_TIMEOUT,
+                )
+            _request_count += 1
+        except requests.exceptions.RequestException as e:
+            last_error = e
+            if attempt < MAX_RETRIES:
+                time.sleep(RETRY_BASE_SEC * (2 ** attempt))
+                continue
+            break
+
+        if resp.status_code >= 500 and attempt < MAX_RETRIES:
+            last_error = RuntimeError(f"HTTP {resp.status_code}")
+            time.sleep(RETRY_BASE_SEC * (2 ** attempt))
+            continue
         if resp.status_code != 200:
             _consecutive_fails += 1
-            if _consecutive_fails >= MAX_CONSECUTIVE_FAILS:
-                raise RuntimeError(
-                    f"连续 {MAX_CONSECUTIVE_FAILS} 次失败 (最后 HTTP {resp.status_code})，自动停止"
-                )
             raise RuntimeError(f"HTTP {resp.status_code}: {resp.text[:300]}")
         _check_risk(resp.text)
-        _consecutive_fails = 0
         try:
-            return resp.json()
-        except Exception:
-            raise RuntimeError(f"响应非 JSON: {resp.text[:300]}")
-    except RiskTriggered:
-        raise
-    except Exception as e:
-        _consecutive_fails += 1
-        if _consecutive_fails >= MAX_CONSECUTIVE_FAILS:
-            raise RuntimeError(f"连续 {MAX_CONSECUTIVE_FAILS} 次失败，自动停止，最后错误: {e}") from e
-        raise
+            payload = resp.json()
+        except Exception as e:
+            raise RuntimeError(f"响应非 JSON: {resp.text[:300]}") from e
+        _validate_business_response(payload)
+        _consecutive_fails = 0
+        return payload
+
+    _consecutive_fails += 1
+    raise RuntimeError(
+        f"请求失败，已重试 {MAX_RETRIES} 次: {last_error}"
+    ) from last_error
 
 
 # ---------- 高频只读预设注册表 ----------
@@ -620,6 +652,100 @@ def fetch_charge_summary(*, start_date: str, end_date: str,
     return _api_call("/report/chargeSum.json", body, method="POST", cookies=cookies)
 
 
+# ---------- 字段字典 ----------
+#
+# fields.json：机器可读字段字典（字段码 -> 中文名/适用范围/展示格式/核验状态/备注）。
+# 启动时加载一次；文件缺失或损坏不崩，退回空字典并在 stderr 提醒。
+FIELDS_PATH = Path(__file__).resolve().parent / "fields.json"
+
+
+def load_fields_dict() -> dict[str, dict]:
+    """字段字典；缺失/损坏不崩，退回空字典并提醒。"""
+    try:
+        return json.loads(FIELDS_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as e:
+        print(f"⚠️ fields.json 不可用({e}),退回内置字段表", file=sys.stderr)
+        return {}
+
+
+FIELDS_DICT = load_fields_dict()
+
+FIELD_FMT_MAP = {
+    "amt": "{:,.2f}",
+    "int": "{:,.0f}",
+    "pct": "{:.2%}",
+    "num": "{:.2f}",
+}
+
+
+def _scope_matches(field_scopes: list[str] | None, cmd_name: str) -> bool:
+    """scope 条目支持通配前缀："report-*" 匹配所有以 report- 开头的命令名。"""
+    for pat in field_scopes or []:
+        if pat == cmd_name:
+            return True
+        if pat.endswith("*") and cmd_name.startswith(pat[:-1]):
+            return True
+    return False
+
+
+def all_fields_for_scope(cmd_name: str) -> list[str]:
+    """FIELDS_DICT 中 scope 匹配 cmd_name 的全部字段码。"""
+    return [k for k, v in FIELDS_DICT.items() if _scope_matches(v.get("scope"), cmd_name)]
+
+
+def resolve_field_list(args: argparse.Namespace, cmd_name: str) -> list[str] | None:
+    """由 --fields / --all-fields 算出本次请求要用的字段列表；都不传返回 None（=默认白名单不变）。"""
+    fields_arg = getattr(args, "fields", None)
+    if fields_arg:
+        return [f.strip() for f in fields_arg.split(",") if f.strip()]
+    if getattr(args, "all_fields", False):
+        return all_fields_for_scope(cmd_name)
+    return None
+
+
+def field_label(field: str) -> str:
+    """verified 字段用字典中文名；未知/candidate 字段用码原名 + '?' 后缀。"""
+    entry = FIELDS_DICT.get(field)
+    if entry and entry.get("status") == "verified":
+        return entry["cn"]
+    return f"{field}?"
+
+
+def format_field_value(field: str, value: Any) -> str:
+    """按字典 fmt 格式化；字典无该字段/无 fmt 时直接 str()；None 显示 '-'。"""
+    if value is None:
+        return "-"
+    entry = FIELDS_DICT.get(field)
+    fmt = FIELD_FMT_MAP.get(entry.get("fmt")) if entry else None
+    if fmt:
+        try:
+            return fmt.format(value)
+        except (TypeError, ValueError):
+            return str(value)
+    return str(value)
+
+
+def fetch_with_field_fallback(custom_call, default_call, field_list, default_fields):
+    """自定义字段(--fields/--all-fields)请求整体报错时，用默认白名单重发一次兜底。
+
+    重发成功 → 说明默认白名单没问题，问题出在自定义字段这批里；报出本次新增字段
+    （即自定义集合与默认白名单的差集）后抛错退出，不做逐字段二分定位(YAGNI)。
+    重发也失败 → 大概率是接口/网络本身的问题，原样抛出原始异常。
+    field_list 为 None（没传 --fields/--all-fields）时不做任何兜底，直接透传异常。
+    """
+    try:
+        return custom_call()
+    except Exception as original_err:
+        if field_list is None:
+            raise
+        try:
+            default_call()
+        except Exception:
+            raise original_err
+        diff = sorted(set(field_list) - set(default_fields))
+        raise RuntimeError(f"字段不被接口接受: {diff}") from original_err
+
+
 # ---------- 通用报表接口 /report/query.json ----------
 #
 # 从 HAR 实测发现：万相台 11 个侧栏报表里有 10 个走同一个 /report/query.json，
@@ -664,12 +790,17 @@ REPORT_TYPES = {
 def fetch_report(*, rpt_type: str, dimension: str,
                   start_date: str, end_date: str,
                   page_no: int = 1, page_size: int = 20,
+                  offset: int | None = None,
+                  item_search: str | None = None,
                   effect_window: int = 15,
+                  field_list: list[str] | None = None,
                   cookies: dict[str, str] | None = None) -> dict[str, Any]:
     """通用报表查询。
 
     rpt_type:   campaign / adgroup / bidword / crowd / item_promotion / creative / area / coupon / real_time
     dimension:  account (总览) / date (按天) / campaign / adgroup / word / crowd / promotion / province / creative
+    field_list: 传了就原样替换默认指标白名单塞进 queryFieldIn（未知码原样透传=试探入口）；
+                None（默认）走原来的 REPORT_METRICS 白名单，行为不变。
     """
     cookies = cookies or load_alimama_cookies()
     is_realtime = rpt_type == "real_time"
@@ -684,7 +815,7 @@ def fetch_report(*, rpt_type: str, dimension: str,
         "needCountAccelerate": True,
         "rptType": rpt_type,
         "queryDomains": [dimension],
-        "queryFieldIn": list(REPORT_METRICS.keys()),
+        "queryFieldIn": field_list if field_list is not None else list(REPORT_METRICS.keys()),
         "startTime": start_date,
         "endTime": end_date,
         "splitType": "hour" if is_realtime else "day",
@@ -692,8 +823,17 @@ def fetch_report(*, rpt_type: str, dimension: str,
         "havingList": [],
         "pageSize": page_size,
         "pageNo": page_no,
+        "orderField": "charge",
+        "orderBy": "desc",
         "unifyType": "zhai",
     }
+    # 网页报表使用 offset 分页；pageNo 会被服务端忽略。
+    # 默认按花费降序，避免关键词第一页落到大量零消耗历史词。
+    body["offset"] = offset if offset is not None else (page_no - 1) * page_size
+    # 商品搜索:顶层 itemIdOrName,传完整 item_id 服务端精确返回该商品,传文字按名搜
+    # (2026-07-08 HAR 实测:itemIdOrName=完整ID → count=1;残缺ID → count=0)
+    if item_search is not None:
+        body["itemIdOrName"] = item_search
     return _api_call("/report/query.json", body, method="POST", cookies=cookies)
 
 
@@ -701,11 +841,22 @@ def cmd_report(args: argparse.Namespace) -> None:
     rpt_info = REPORT_TYPES[args.rpt_type]
     dim = args.dim or rpt_info["list_domain"]
     end = args.end_date or args.date
-    data = fetch_report(
-        rpt_type=args.rpt_type, dimension=dim,
-        start_date=args.date, end_date=end,
-        page_no=args.page, page_size=args.limit,
-        effect_window=args.window,
+    default_fields = list(REPORT_METRICS.keys())
+    field_list = resolve_field_list(args, "report-*")
+
+    def _do(fl: list[str] | None) -> dict[str, Any]:
+        return fetch_report(
+            rpt_type=args.rpt_type, dimension=dim,
+            start_date=args.date, end_date=end,
+            page_no=args.page, page_size=args.limit,
+            offset=getattr(args, "offset", None),
+            item_search=getattr(args, "search", None),
+            effect_window=args.window,
+            field_list=fl,
+        )
+
+    data = fetch_with_field_fallback(
+        lambda: _do(field_list), lambda: _do(None), field_list, default_fields,
     )
     if args.raw or args.out:
         out = json.dumps(data, ensure_ascii=False, indent=2)
@@ -730,6 +881,20 @@ def cmd_report(args: argparse.Namespace) -> None:
 
     print(f"# 万相台 - {rpt_info['name']}（维度: {dim}）")
     print(f"# {args.date} ~ {end}  转化窗口 {args.window} 天  共 {count} 条，本页 {len(rows)}")
+
+    if field_list is not None:
+        # --fields/--all-fields 给了自定义字段 → 按用户给的字段顺序渲染动态列，
+        # 而不是原来那套固定 6 列（展现/花费/成交/ROI/点击/CTR）。
+        if not rows:
+            print("\n（无明细数据）")
+            return
+        rows_sorted = sorted(rows, key=lambda r: -float(r.get("charge") or 0))
+        print()
+        print(" | ".join(field_label(f) for f in field_list))
+        print("-" * 90)
+        for r in rows_sorted[:args.limit]:
+            print(" | ".join(format_field_value(f, r.get(f)) for f in field_list))
+        return
 
     # 总计
     if total_data:
@@ -791,6 +956,17 @@ PROMO_BIZ_CODES = {
     "crowd":     ("onebpDisplay", "人群推广"),
 }
 
+def _natural_flow_not_settled(end_date: str) -> bool:
+    """区间结束日距今 ≤2 天时，自然流量相关字段（naturalPayAmt/orgNaturalPv 等）
+    归因未跑完，数值还没出来——提醒用户别拿这两天的自然流量列当真。
+    """
+    try:
+        end = datetime.strptime(end_date, "%Y-%m-%d").date()
+    except (TypeError, ValueError):
+        return False
+    return (date.today() - end).days <= 2
+
+
 # 场景大盘汇总（scene-summary）：/report/query.json + splitType=sum，按 URL ?bizCode= 区分场景。
 # 请求全字段（HAR 实测有效），展示挑核心。展现量字段 = adPv。
 SCENE_SUMMARY_REQUEST_FIELDS = [
@@ -799,6 +975,8 @@ SCENE_SUMMARY_REQUEST_FIELDS = [
     "cartInshopNum", "cartRate", "cartCost", "colCartCost",
     "clickUv", "clickUvCost", "shopVisitUv", "shopVisitUvRate",
     "firstPurchaseUv", "newAlipayInshopUvRate",
+    "alipayInshopUv", "alipayInshopCost", "colCartNum",
+    "naturalPayAmt", "orgNaturalPv",
 ]
 SCENE_SUMMARY_SHOW = [
     ("adPv", "展现量", "{:,.0f}"),
@@ -814,6 +992,11 @@ SCENE_SUMMARY_SHOW = [
     ("cartInshopNum", "加购数", "{:,.0f}"),
     ("cartRate", "加购率", "{:.2%}"),
     ("clickUv", "点击人数", "{:,.0f}"),
+    ("alipayInshopUv", "成交人数", "{:,.0f}"),
+    ("alipayInshopCost", "总成交成本", "¥{:.2f}"),
+    ("colCartNum", "总收藏加购数", "{:,.0f}"),
+    ("naturalPayAmt", "自然流量转化金额", "¥{:,.2f}"),
+    ("orgNaturalPv", "自然流量曝光量", "{:,.0f}"),
 ]
 
 
@@ -1277,11 +1460,13 @@ def cmd_promo_off(args: argparse.Namespace) -> None:
 
 
 def fetch_scene_summary(biz_code: str, start_date: str, end_date: str, *,
-                        realtime: bool = True, cookies: dict[str, str] | None = None) -> dict[str, Any]:
+                        realtime: bool = True, field_list: list[str] | None = None,
+                        cookies: dict[str, str] | None = None) -> dict[str, Any]:
     """某推广场景的大盘汇总（展现/点击/花费/成交/ROI…）。
 
     关键：场景过滤靠 URL 的 ?bizCode=<scene>（body 里的 bizCode 不生效）。
     splitType=sum 求区间合计。三场景之和 = 全账户合计（实测对得上）。
+    field_list 传了就替换默认字段白名单（未知码原样透传）；None 行为不变。
     """
     cookies = cookies or load_alimama_cookies()
     body = {
@@ -1289,7 +1474,7 @@ def fetch_scene_summary(biz_code: str, start_date: str, end_date: str, *,
         "startTime": start_date, "endTime": end_date,
         "splitType": "sum", "computeType": "sum",
         "sourceList": ["scene", "adgroup_list"], "queryDomains": [],
-        "queryFieldIn": SCENE_SUMMARY_REQUEST_FIELDS,
+        "queryFieldIn": field_list if field_list is not None else SCENE_SUMMARY_REQUEST_FIELDS,
     }
     return _api_call(f"/report/query.json?bizCode={biz_code}", body, method="POST", cookies=cookies)
 
@@ -1297,18 +1482,25 @@ def fetch_scene_summary(biz_code: str, start_date: str, end_date: str, *,
 def cmd_scene_summary(args: argparse.Namespace) -> None:
     """各推广场景大盘汇总（展现量/点击/花费/成交/ROI/加购…）。
 
-    默认看过去 7 天（昨天数据凌晨可能未出，单看昨天易为空）。
+    默认看过去 14 天（昨天数据凌晨可能未出，单看昨天易为空）。
     """
     biz_keys = [args.biz] if getattr(args, "biz", None) else list(PROMO_BIZ_CODES)
     cookies = load_alimama_cookies()
     start, end = args.date, (args.end_date or args.date)
     realtime = not args.no_realtime
+    field_list = resolve_field_list(args, "scene-summary")
 
     results = []
     for key in biz_keys:
         biz_code, label = PROMO_BIZ_CODES[key]
         try:
-            d = fetch_scene_summary(biz_code, start, end, realtime=realtime, cookies=cookies)
+            d = fetch_with_field_fallback(
+                lambda bc=biz_code: fetch_scene_summary(
+                    bc, start, end, realtime=realtime, field_list=field_list, cookies=cookies),
+                lambda bc=biz_code: fetch_scene_summary(
+                    bc, start, end, realtime=realtime, field_list=None, cookies=cookies),
+                field_list, SCENE_SUMMARY_REQUEST_FIELDS,
+            )
         except Exception as e:
             results.append((key, label, None, str(e)))
             continue
@@ -1337,11 +1529,158 @@ def cmd_scene_summary(args: argparse.Namespace) -> None:
             print(f"   ⚠️ {err[:80]}\n"); continue
         if not row:
             print("   （该区间无投放数据）\n"); continue
-        for field, name, fmt in SCENE_SUMMARY_SHOW:
-            v = row.get(field)
-            shown = fmt.format(v) if isinstance(v, (int, float)) else "—"
-            print(f"   {name:<8}: {shown}")
+        if field_list is not None:
+            for f in field_list:
+                print(f"   {field_label(f):<8}: {format_field_value(f, row.get(f))}")
+        else:
+            for field, name, fmt in SCENE_SUMMARY_SHOW:
+                v = row.get(field)
+                shown = fmt.format(v) if isinstance(v, (int, float)) else "—"
+                print(f"   {name:<8}: {shown}")
         print()
+
+    if _natural_flow_not_settled(end):
+        print("⚠️ 最近2天自然流量列尚未出数（归因未完成）")
+
+
+# 分日详情（scene-daily）：营销场景报表 → 某场景 → 分日详情。
+# rptType=account + queryDomains=["date"] 按天拆；场景过滤靠 URL ?bizCode=（与 scene-summary 同）。
+# 每行一天，含 thedate + 全指标；服务端返回 totalData 作为“合计数据”行。
+# 默认表格列（对齐网页“分日数据明细”的可见列）。其余指标（加购数/加购率/潜客率/
+# 新成交客户率/直接成交单数/各类成本…）已在响应里，用 --raw 全部拿得到。
+# 新字段常量：与 SCENE_SUMMARY_REQUEST_FIELDS 追加的 5 个一致，供 fetch_scene_daily
+# 的 queryFieldIn 复用（REPORT_METRICS 本身不动，其他 report-* 命令共用它）。
+SCENE_NEW_FIELDS = [
+    "alipayInshopUv", "alipayInshopCost", "colCartNum",
+    "naturalPayAmt", "orgNaturalPv",
+]
+
+SCENE_DAILY_SHOW = [
+    ("adPv", "展现", "{:,.0f}"),
+    ("click", "点击", "{:,.0f}"),
+    ("charge", "花费", "{:,.2f}"),
+    ("ctr", "点击率", "{:.2%}"),
+    ("ecpc", "平均点击花费", "{:.2f}"),
+    ("alipayInshopAmt", "成交额", "{:,.2f}"),
+    ("alipayInshopNum", "笔数", "{:,.0f}"),
+    ("cvr", "转化率", "{:.2%}"),
+    ("roi", "ROI", "{:.2f}"),
+    ("alipayInshopUv", "成交人数", "{:,.0f}"),
+    ("naturalPayAmt", "自然流量转化金额", "{:,.2f}"),
+    ("orgNaturalPv", "自然流量曝光量", "{:,.0f}"),
+]
+
+
+SCENE_DAILY_REQUEST_FIELDS = list(dict.fromkeys(list(REPORT_METRICS.keys()) + SCENE_NEW_FIELDS))
+
+
+def fetch_scene_daily(biz_code: str, start_date: str, end_date: str, *,
+                      effect_window: int = 15,
+                      field_list: list[str] | None = None,
+                      cookies: dict[str, str] | None = None) -> dict[str, Any]:
+    """某推广场景的分日详情（按天的展现/点击/花费/成交/ROI）。
+
+    与 scene-summary 同一接口，区别：splitType=day + queryDomains=[date] 按天拆，
+    走 pcBaseReport 源、rptType=account。场景过滤同样靠 URL ?bizCode=<scene>。
+    field_list 传了就替换默认字段白名单（未知码原样透传）；None 行为不变。
+    """
+    cookies = cookies or load_alimama_cookies()
+    body = {
+        "bizCode": "universalBP", "fromRealTime": False,
+        "source": "baseReport", "from": "pcBaseReport",
+        "byPage": True, "byPageWithoutCount": False, "totalTag": True,
+        "needCountAccelerate": True,
+        "rptType": "account", "queryDomains": ["date"],
+        "queryFieldIn": field_list if field_list is not None else SCENE_DAILY_REQUEST_FIELDS,
+        "startTime": start_date, "endTime": end_date,
+        "splitType": "day", "effectEqual": effect_window, "havingList": [],
+        "pageSize": 100, "pageNo": 1, "unifyType": "zhai",
+    }
+    return _api_call(f"/report/query.json?bizCode={biz_code}", body, method="POST", cookies=cookies)
+
+
+def _scene_daily_value(row: dict[str, Any], field: str) -> Any:
+    """取指标；ecpc(平均点击花费) 服务端不返回，用 花费/点击 现算（与网页一致）。"""
+    v = row.get(field)
+    if v is None and field == "ecpc":
+        charge, click = row.get("charge"), row.get("click")
+        if isinstance(charge, (int, float)) and isinstance(click, (int, float)) and click:
+            return charge / click
+    return v
+
+
+def _scene_daily_line(row: dict[str, Any]) -> str:
+    cells = []
+    for field, _, fmt in SCENE_DAILY_SHOW:
+        v = _scene_daily_value(row, field)
+        cells.append(fmt.format(v) if isinstance(v, (int, float)) else "—")
+    return "  ".join(f"{c:>10}" for c in cells)
+
+
+def cmd_scene_daily(args: argparse.Namespace) -> None:
+    """某推广场景的分日详情（营销场景报表 → 场景 → 分日详情），默认过去14天。"""
+    biz_keys = [args.biz] if getattr(args, "biz", None) else list(PROMO_BIZ_CODES)
+    cookies = load_alimama_cookies()
+    start, end = args.date, (args.end_date or args.date)
+    field_list = resolve_field_list(args, "scene-daily")
+
+    results = []
+    for key in biz_keys:
+        biz_code, label = PROMO_BIZ_CODES[key]
+        try:
+            d = fetch_with_field_fallback(
+                lambda bc=biz_code: fetch_scene_daily(
+                    bc, start, end, effect_window=args.window, field_list=field_list, cookies=cookies),
+                lambda bc=biz_code: fetch_scene_daily(
+                    bc, start, end, effect_window=args.window, field_list=None, cookies=cookies),
+                field_list, SCENE_DAILY_REQUEST_FIELDS,
+            )
+        except Exception as e:
+            results.append((key, label, None, None, str(e)))
+            continue
+        pd = d.get("data") or {}
+        rows = pd.get("list") or []
+        total = pd.get("totalData")
+        if isinstance(total, list):
+            total = total[0] if total else None
+        results.append((key, label, rows, total, None))
+
+    if args.raw or args.out:
+        payload = {"startTime": start, "endTime": end,
+                   "scenes": {k: {"list": r, "totalData": t} for k, _, r, t, _ in results}}
+        out = json.dumps(payload, ensure_ascii=False, indent=2)
+        if args.out:
+            Path(args.out).write_text(out)
+            print(f"已写入 {args.out}", file=sys.stderr)
+        else:
+            print(out)
+        return
+
+    if field_list is not None:
+        header = "  ".join(f"{field_label(f):>10}" for f in field_list)
+    else:
+        header = "  ".join(f"{name:>10}" for _, name, _ in SCENE_DAILY_SHOW)
+    print(f"# 万相台 分日详情  {start} ~ {end}（历史归因，转化窗口 {args.window} 天）\n")
+    for key, label, rows, total, err in results:
+        print(f"━━ {label} ━━")
+        if err:
+            print(f"   ⚠️ {err[:80]}\n"); continue
+        if not rows:
+            print("   （该区间无投放数据）\n"); continue
+        print(f"  {'日期':>10}  {header}")
+        if field_list is not None:
+            def _line(row: dict[str, Any]) -> str:
+                return "  ".join(f"{format_field_value(f, row.get(f)):>10}" for f in field_list)
+        else:
+            _line = _scene_daily_line
+        for row in sorted(rows, key=lambda r: str(r.get("thedate"))):
+            print(f"  {str(row.get('thedate')):>10}  {_line(row)}")
+        if total:
+            print(f"  {'合计':>10}  {_line(total)}")
+        print()
+
+    if _natural_flow_not_settled(end):
+        print("⚠️ 最近2天自然流量列尚未出数（归因未完成）")
 
 
 def cmd_charge_summary(args: argparse.Namespace) -> None:
@@ -1384,6 +1723,15 @@ def cmd_charge_summary(args: argparse.Namespace) -> None:
 
 # ---------- main ----------
 
+def _add_fields_group(sub: argparse.ArgumentParser) -> None:
+    """给 report-*/scene-summary/scene-daily 加 --fields / --all-fields 万能选列（互斥）。"""
+    g = sub.add_mutually_exclusive_group()
+    g.add_argument("--fields",
+                   help="逗号分隔字段码，替换默认字段白名单塞进请求(未知码原样透传=试探入口，如 --fields foo,charge)")
+    g.add_argument("--all-fields", action="store_true",
+                   help="拉取 fields.json 中该命令范围内的全部已知字段")
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="alimama-cli", description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -1393,7 +1741,7 @@ def build_parser() -> argparse.ArgumentParser:
     d.set_defaults(func=cmd_doctor)
 
     yesterday = (date.today() - timedelta(days=1)).isoformat()
-    week_ago = (date.today() - timedelta(days=7)).isoformat()
+    two_weeks_ago = (date.today() - timedelta(days=14)).isoformat()
 
     ap = sp.add_parser("api", help="通用接口探测：alimama-cli api /xxx.json [--body JSON] [-p k=v]")
     ap.add_argument("path", help='接口路径，如 "/account/checkRealBalance.json"')
@@ -1447,16 +1795,30 @@ def build_parser() -> argparse.ArgumentParser:
     po.set_defaults(func=cmd_promo_off)
 
     # 推广场景大盘汇总：展现量/点击/花费/成交/ROI/加购…
-    ss = sp.add_parser("scene-summary", help="各推广场景大盘汇总（展现量/点击/花费/成交/ROI），默认过去7天")
+    ss = sp.add_parser("scene-summary", help="各推广场景大盘汇总（展现量/点击/花费/成交/ROI），默认过去14天")
     ss.add_argument("--biz", choices=list(PROMO_BIZ_CODES.keys()),
                     help="限定场景 wholesite/keyword/crowd（默认三个都出）")
-    ss.add_argument("--date", default=week_ago, help=f"开始日期 (默认过去7天起 {week_ago})")
+    ss.add_argument("--date", default=two_weeks_ago, help=f"开始日期 (默认过去14天起 {two_weeks_ago})")
     ss.add_argument("--end-date", default=yesterday, help=f"结束日期 (默认昨天 {yesterday})")
     ss.add_argument("--no-realtime", action="store_true",
                     help="用历史归因(默认实时归因，与网页一致)")
     ss.add_argument("--raw", action="store_true")
     ss.add_argument("--out", help="输出到文件")
+    _add_fields_group(ss)
     ss.set_defaults(func=cmd_scene_summary)
+
+    sd = sp.add_parser("scene-daily",
+                       help="营销场景报表→分日详情：某场景按天的展现/点击/花费/成交/ROI，默认过去14天")
+    sd.add_argument("--biz", choices=list(PROMO_BIZ_CODES.keys()),
+                    help="限定场景 wholesite/keyword/crowd（默认三个都出）")
+    sd.add_argument("--date", default=two_weeks_ago, help=f"开始日期 (默认过去14天起 {two_weeks_ago})")
+    sd.add_argument("--end-date", default=yesterday, help=f"结束日期 (默认昨天 {yesterday})")
+    sd.add_argument("--window", type=int, default=15, choices=[1, 7, 15],
+                    help="转化窗口天数 1/7/15 (默认 15)")
+    sd.add_argument("--raw", action="store_true")
+    sd.add_argument("--out", help="输出到文件")
+    _add_fields_group(sd)
+    sd.set_defaults(func=cmd_scene_daily)
 
     cs = sp.add_parser("charge-summary", help="花费汇总：各营销场景花了多少（关键词推广/人群推广/...）")
     cs.add_argument("--date", default=yesterday, help=f"开始日期 YYYY-MM-DD (默认 {yesterday})")
@@ -1489,8 +1851,13 @@ def build_parser() -> argparse.ArgumentParser:
         sub.add_argument("--window", type=int, default=15, choices=[1, 7, 15], help="转化窗口 1/7/15 天")
         sub.add_argument("--limit", type=int, default=10, help="拉多少条 (默认 10)")
         sub.add_argument("--page", type=int, default=1)
+        sub.add_argument("--offset", type=int, default=None,
+                         help="按 offset 分页(item_promotion 报表 pageNo 失效,须用 offset 全量翻页)")
+        sub.add_argument("--search", default=None,
+                         help="按商品搜索:传完整 item_id 精确返回该商品,传文字按商品名搜(itemIdOrName)")
         sub.add_argument("--raw", action="store_true")
         sub.add_argument("--out", help="输出到文件")
+        _add_fields_group(sub)
         sub.set_defaults(func=cmd_report, rpt_type=rpt)
 
     for name, preset in LIST_PRESETS.items():
@@ -1518,6 +1885,9 @@ def main() -> None:
     except RiskTriggered as e:
         print(f"\n⚠️  风险信号触发，已停止：{e}", file=sys.stderr)
         sys.exit(2)
+    except (RuntimeError, ValueError) as e:
+        print(f"✗ {e}", file=sys.stderr)
+        sys.exit(1)
     except KeyboardInterrupt:
         print("\n中断", file=sys.stderr)
         sys.exit(130)
