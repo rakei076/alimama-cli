@@ -26,5 +26,15 @@
   "alipayInshopCost": {"cn": "总成交成本", "scope": ["report-*", "scene-summary", "scene-daily"], "fmt": "amt", "status": "verified", "note": "花费/成交笔数;单日数据归因未完成会偏低,建议查7天+区间;2026-07-20 核准"},
   "colCartNum": {"cn": "总收藏加购数", "scope": ["report-*", "scene-summary", "scene-daily"], "fmt": "int", "status": "verified", "note": "2026-07-20 核准"},
   "naturalPayAmt": {"cn": "自然流量转化金额", "scope": ["scene-summary", "scene-daily"], "fmt": "amt", "status": "verified", "note": "T-2 之前的日期才可信,最新1-2天恒为0(归因未完成);2026-07-20 表头DOM破译(mx-stickytable-drag)+对照核准"},
-  "orgNaturalPv": {"cn": "自然流量曝光量", "scope": ["scene-summary", "scene-daily"], "fmt": "int", "status": "verified", "note": "T-2 之前的日期才可信,最新1-2天恒为0(归因未完成);2026-07-20 表头DOM破译(mx-stickytable-drag)+对照核准"}
+  "orgNaturalPv": {"cn": "自然流量曝光量", "scope": ["scene-summary", "scene-daily"], "fmt": "int", "status": "verified", "note": "T-2 之前的日期才可信,最新1-2天恒为0(归因未完成);2026-07-20 表头DOM破译(mx-stickytable-drag)+对照核准"},
+
+  "wwLzNum": {"cn": "旺旺留资量", "scope": ["report-*"], "fmt": "int", "status": "candidate", "note": "2026-08-09 试探接口认;账户级85天=100,恰等于 wwMsgLzNum+wwCardLzNum,故判定为旺旺留资总量;中文名未经网页对照,报表页默认列不含该族。**四维度实测全部可取：account/item/campaign/adgroup,计划级与单元级为平台独立归因(非按点击摊派),故计划级诊断报表可纯用万相台一个源做**。成本与率平台不给,自己算:客咨成本=charge/wwLzNum、咨询率=wwLzNum/click"},
+  "wwMsgLzNum": {"cn": "旺旺消息留资量", "scope": ["report-*"], "fmt": "int", "status": "candidate", "note": "2026-08-09 试探接口认;账户级85天=100,是 wwLzNum 的唯一来源"},
+  "wwCardLzNum": {"cn": "旺旺卡片留资量", "scope": ["report-*"], "fmt": "int", "status": "candidate", "note": "2026-08-09 试探接口认;该账户恒为0"},
+  "wwIndustryLzNum": {"cn": "旺旺行业留资量", "scope": ["report-*"], "fmt": "int", "status": "candidate", "note": "2026-08-09 试探接口认;该账户恒为0"},
+  "lzNum": {"cn": "留资量(非旺旺渠道)", "scope": ["report-*"], "fmt": "int", "status": "candidate", "note": "2026-08-09 试探接口认;该账户恒为0,与 wwLzNum 并列不含旺旺;成交导向店铺无值"},
+  "leadsNum": {"cn": "线索量", "scope": ["report-*"], "fmt": "int", "status": "candidate", "note": "2026-08-09 试探接口认;恒等于 gmvInshopNum,且略高于 alipayInshopNum(85天 20521 vs 18453),口径未明,别当成交笔数用"},
+  "gmvInshopNum": {"cn": "店铺成交量(口径待定)", "scope": ["report-*"], "fmt": "int", "status": "candidate", "note": "2026-08-09 未点名也自动返回;恒等于 leadsNum,高于 alipayInshopNum,差额来源未查"},
+
+  "_rejected_2026_08_09": {"cn": "以下字段码试探被接口拒绝(不返回),找旺旺咨询量时别再试", "scope": [], "fmt": "none", "status": "rejected", "note": "咨询类:wwConsultNum/consultNum/imConsultNum/inquiryNum/wangwangConsultNum/consultUv/wwConsultUv/custConsultNum/clueNum/askNum/wwInquiryNum/consultCost/consultLzNum/wwConsultLzNum/phoneLzNum/formLzNum/ddLzNum。成本率类(平台只给量,不给成本和率):lzCost/leadsCost/lzRate/wwLzCost/wwLzRate/leadsRate/lzUv/wwLzUv/lzAmt/wwMsgLzCost/leadsGmv/cpl —— 万相台把'咨询'一律叫'留资(Lz)',查 wwLzNum 系列"}
 }

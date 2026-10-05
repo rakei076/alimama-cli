@@ -1,7 +1,8 @@
 ---
 name: alimama-cli
-description: 万相台 AI 无界（one.alimama.com / 阿里妈妈 onebp）数据查询 + 单元关停 CLI。给 AI 代理一行命令拉取自家店铺的广告推广数据 — 涵盖"报表"(11 种历史复盘) + "推广"(3 种当前在投计划) + 单元/商品开关查询 + 账户余额 / 营销活动。查询类全只读；唯一写操作 promo-off（按宝贝ID关停在投单元）默认 dry-run，必须 --execute 才执行。触发场景：用户提到"万相台/阿里妈妈/广告投放/推广复盘/推广计划/onebp/alimama/广告效果/广告花费/ROI/计划报表/关键词推广/人群推广/货品全站推广/营销场景报表/广告数据/广告诊断/关停广告/关掉某商品"等。
-author: rakel
+description: 万相台 AI 无界（one.alimama.com / 阿里妈妈 onebp）只读数据查询 CLI。给 AI 代理一行命令拉取自家店铺的广告推广数据 — 涵盖"报表"(11 种历史复盘) + "推广"(当前在投计划) + 单元/商品开关查询 + 场景大盘 + 账户余额 / 营销活动。全部只读，没有任何改动广告的功能。触发场景：用户提到"万相台/阿里妈妈/广告投放/推广复盘/推广计划/onebp/alimama/广告效果/广告花费/ROI/计划报表/关键词推广/人群推广/货品全站推广/营销场景报表/广告数据/广告诊断"等。
+author: Rakel
+homepage: https://rakel.top
 version: "0.12.0"
 tags:
   - taobao
@@ -11,24 +12,32 @@ tags:
   - cli
 ---
 
-# alimama-cli — 万相台 AI 无界 数据查询 + 单元关停 CLI
+# alimama-cli — 万相台 AI 无界 只读数据查询 CLI
+
+> 本 Skill 作者：Rakel · 个人网站：https://rakel.top
 
 ## 一句话上手
 
 ```bash
-~/.claude/skills/alimama-cli/scripts/alimama.sh doctor            # 验证 cookie
-~/.claude/skills/alimama-cli/scripts/alimama.sh charge-summary    # 看昨天广告花了多少
+scripts/alimama.sh doctor            # 验证 cookie
+scripts/alimama.sh charge-summary    # 看昨天广告花了多少
 ```
 
 ## 适用人群
 
-阿里妈妈广告主自己拉取自家店铺数据 + 关停广告。**查询类全只读**；**唯一的写操作是 `promo-off`（按宝贝ID关停在投单元），默认只列清单不执行，必须显式 `--execute` 才动**，且不调价/不删除/不新建。
+阿里妈妈广告主自己拉取自家店铺的广告数据。**全部只读**：不建计划、不调价、不开关、不删除，本工具没有任何改动广告的功能。
 
 ## 前置条件
 
-- macOS（已测试），Linux/Windows 理论可用
-- macOS Chrome **已登录** https://one.alimama.com；Windows 首次运行会自动打开专用浏览器，登录一次即可
-- 已装 `uv`（推荐）或 `pip install -r requirements.txt`
+- Chrome 已登录 https://one.alimama.com（子账号要有万相台权限）
+- 已装取数桥插件（共用插件，别的店铺数据工具装过就不用再装）：Windows 必须；Mac 可选，不装就直接读 Chrome 的登录
+- 已装 `uv`（推荐）或 Python 3.10+
+
+## 首次使用（拿到这个 skill 后第一件事，AI 先做这个）
+
+1. 运行 `scripts/alimama.sh doctor`（Windows：`scripts\alimama.cmd doctor`）。看到 `checkAccess 通过` 就装好了，跳到下一节。
+2. 提示「没有连上浏览器插件」或插件「太旧」：带用户照 `extension/README.md` 装插件——`chrome://extensions` 打开开发者模式，「加载已解压的扩展程序」选本目录的 `extension/unpacked`（把这个文件夹的完整路径告诉用户）。别的工具装过、版本够新就不用再装。
+3. 提示没登录，或「子账号需要有权限 / 用于会话的 cookie 异常」：请用户在同一个 Chrome 里用有万相台权限的账号登录 one.alimama.com（账号密码由用户自己输入，你不要代填），再运行一次 doctor。
 
 ---
 
@@ -50,7 +59,7 @@ tags:
 
 ---
 
-## 全部子命令（23 个，含 1 个写操作）
+## 全部子命令（全部只读）
 
 ### 🔧 工具/账户类（5 个）
 
@@ -96,7 +105,7 @@ tags:
 
 **`promo-items --campaign <计划ID>`**：列出**一个计划里的全部商品 + 每个商品的开/关状态**（测款计划这类"一计划多商品"必用）。`--biz` 可限定玩法，默认自动搜全部。开关取自单元的 `onlineStatus`（1=开/0=关）；标题为"商品已删除/下架"=广告开着但宝贝没了，该清理。
 
-**`promo-units`**：把所有计划的**全部单元(=商品广告位)拉平成一张表**，相当于网页的"单元 Tab"。`--biz` 限定玩法（默认扫全部 3 种）；`--item <宝贝ID>` 反查**某商品散落在哪些计划、各自开关**（这是"关掉某商品全部投放"的前置视图——一个商品常进多条计划，每条算一个独立单元各有开关）；`--unit <单元ID>` 按单元ID精确定位一条单元。**`--item` 和 `--unit` 都走服务端过滤（不全量拉回来再筛），命中即停。**
+**`promo-units`**：把所有计划的**全部单元(=商品广告位)拉平成一张表**，相当于网页的"单元 Tab"。`--biz` 限定玩法（默认扫全部 3 种）；`--item <宝贝ID>` 反查**某商品散落在哪些计划、各自开关**（一个商品常进多条计划，每条算一个独立单元各有开关）；`--unit <单元ID>` 按单元ID精确定位一条单元。**`--item` 和 `--unit` 都走服务端过滤（不全量拉回来再筛），命中即停。**
 
 ---
 
@@ -114,7 +123,6 @@ tags:
 | "宝贝 XXX 散在哪些计划里 / 各自开关" | `promo-units --item XXX`（服务端过滤；三种玩法都准，含关键词推广） |
 | "单元 XXX 是什么 / 看某个单元ID的信息" | `promo-units --unit XXX`（服务端精确定位，命中即停） |
 | "把所有计划的单元拉平成一张表看" | `promo-units`（相当于网页"单元 Tab"） |
-| "把宝贝 XXX 的广告全关了" | ⚠️写：`promo-off --item XXX`（先看 dry-run 清单），确认后 `promo-off --item XXX --execute` |
 | "人群/关键词推广的展现量/点击/花费/ROI 大盘" | `scene-summary [--biz crowd]`（默认过去7天，展现量=adPv） |
 | "关键词推广这几天每天花费/ROI 怎么走的" / "某场景分日趋势" | `scene-daily --biz keyword --date X --end-date Y`（按天时序 + 合计行） |
 | "看哪个人群转化好" | `report-crowd --date X --end-date Y` |
@@ -237,13 +245,13 @@ tags:
 
 **`POST /adgroup/horizontal/findPage.json?bizCode=<X>`** —— 扁平单元列表，每行一个商品广告位，**三种玩法都直接返回 `material.materialId`（宝贝ID）+ `material.title` + `onlineStatus` + `campaignId/campaignName`**。
 
-请求体：`{bizCode, offset, pageSize, statusList:[start,pause,end], campaignId?, itemId?, adgroupId?}`。代码见 `fetch_all_adgroups()` + `_adgroup_unit()`，`promo-units`/`promo-items`/`promo-off` 都走它。
+请求体：`{bizCode, offset, pageSize, statusList:[start,pause,end], campaignId?, itemId?, adgroupId?}`。代码见 `fetch_all_adgroups()` + `_adgroup_unit()`，`promo-units`/`promo-items` 都走它。
 
 **三个服务端过滤参数（默认优先用，别再全量拉回客户端筛）**：
 | body 参数 | 作用 | 实测 |
 |---|---|---|
 | `campaignId` | 只取某计划下的单元 | `promo-items` 用 |
-| `itemId`（数字）| 只取某宝贝ID的单元 | **返回该商品散落各计划的全部单元**（验过 1 商品命中 15 单元），对 `promo-off` 关停安全；`promo-units --item`/`promo-off` 用 |
+| `itemId`（数字）| 只取某宝贝ID的单元 | **返回该商品散落各计划的全部单元**（验过 1 商品命中 15 单元）；`promo-units --item` 用 |
 | `adgroupId`（数字）| 精确定位某个单元ID | count=1 命中即停；`promo-units --unit` 用 |
 
 > ⚠️ 工作准则：**有 ID（计划/宝贝/单元）就走服务端过滤，命中即停；不要把全量(关键词单元上千)拉回客户端再 filter**——慢且易超时。仅当用户要"全表"才不带过滤。
@@ -259,20 +267,6 @@ tags:
 - 计划级 `adgroupRequired:true` 对关键词推广 **material 恒 null**，且单元巨多（单计划见过 266/1848 总），响应体大易超时 → **单元/商品查询一律用单元级接口**，不要再用 adgroupRequired 取单元。
 - 单请求超时默认 30s（`ALIMAMA_TIMEOUT` 可覆盖）；onebpSearch 服务端偏慢，`fetch_all_adgroups` 用 pageSize=50。
 - `_promo_item()`/`_promo_all_items()`（计划级取单元）仅保留给货品全站/人群的快速取首图场景。
-
-### 写接口：开关单元（`promo-off` 用）
-
-**`POST /adgroup/updatePart.json?csrfId=<X>&bizCode=<biz>`** —— HAR 实测：
-```
-body: {"bizCode":"<biz>","adgroupList":[{"campaignId":<cid>,"adgroupId":<aid>,"displayStatus":"pause"}],"csrfId":"<X>"}
-```
-- `displayStatus`: `"pause"`=关（响应 `onlineStatus:0`） / `"start"`=开（`onlineStatus:1`）
-- `adgroupList` 可一次传多个单元（同 bizCode 批量）
-- 成功标志：响应 `data.errorCount == 0`
-- `loginPointId` / `bx-v` 头：HAR 里有，但同源读接口不带也成 → **判定为可选埋点，CLI 省略**（首次实测确认）
-- 代码：`set_adgroups_status()`；命令 `promo-off`（默认 dry-run，`--execute` 才真发）
-
-**写操作铁律**：`promo-off` 默认只列清单不动；必须 `--execute` 才调写接口；AI 代理执行前必须把清单给用户确认。只关单元(pause)，不调价/不删/不新建。
 
 ### 场景大盘汇总（`scene-summary`）—— 展现量等大盘指标
 
@@ -292,7 +286,7 @@ body: {bizCode, byPage:false, fromRealTime:true, startTime, endTime,
 
 ## 字段字典与发现方法论（v0.12+，AI 取数主力走这里）
 
-**主力不是背命令，是查字典。** 仓库根目录 `fields.json` 是机器可读字段字典，每条 = `字段码 → {cn 中文名, scope 适用命令, fmt 格式, status, note 口径备注}`。
+**主力不是背命令，是查字典。** `tb/platforms/alimama/fields.json` 是机器可读字段字典，每条 = `字段码 → {cn 中文名, scope 适用命令, fmt 格式, status, note 口径备注}`。
 
 **标准取数动线：**
 1. **先读 `fields.json`** 找到要的字段码 + 它的 `note`（口径警告）
@@ -301,44 +295,28 @@ body: {bizCode, byPage:false, fromRealTime:true, startTime, endTime,
 
 `status: candidate` 的字段中文名尚未破译，用前先验证；`note` 里的口径警告**必须遵守**（见下方坑规矩）。
 
-### 发现方法论三招（字典里没有的字段，按成本从低到高）
-
-1. **翻响应自带元数据**：部分接口响应自带字段码+中文名，`--raw` 拉一次全收（sycm 侧 `data.columns` 是典范）。
-2. **`queryFieldIn` 试探**：把候选字段码塞进 `--fields` 发请求 —— 返回带值=接口认，没返回=不认，**试错零损失**。万相台报表接口就是"你报字段名、有就发货"的点单式接口。
-3. **网页对照**：登录网页找到目标指标，两条路——(a) 表头 DOM 的 `mx-stickytable-drag` 属性**直接写着字段码**（2026-07-20 用它破了 `naturalPayAmt` 自然流量转化金额 / `orgNaturalPv` 自然流量曝光量）；(b) 拿网页显示数值当答案纸，`--raw` 全量拉回后按数值反查字段码。
-
-### 写回规矩（越用字典越厚）
-
-三招探出新字段并**实测核准后**，必须以 `status: verified` 写回 `fields.json`，`note` 附验证日期与方法；试探失败的候选也记一笔（`status: rejected` + note），防后人重复踩。**`fields.json` 永不含真实数值/店名**，可进公共库。
-
 ### 坑规矩（口径警告，写数前必看）
 
 - **自然流量两列**（`naturalPayAmt`/`orgNaturalPv`）：**T-2 之前的日期才可信**，最新 1-2 天恒为 0（归因未完成）。
 - **单日成交/ROI 归因未完成会偏低**：复盘查 7 天+区间（`scene-summary`/`scene-daily` 默认已 14 天）。
 
-> 配套工具：**sycm-cli**（生意参谋店铺数据体检）同样有 `fields.json` 字典 + 三招方法论，广告×自然流量交叉复盘两个一起用。
+> 配套工具：**sycm-cli**（生意参谋店铺数据体检）同样有 `fields.json` 字典，广告×自然流量交叉复盘两个一起用。
 
 ---
 
 ## 安全护栏
 
-**硬约束**（真正的风险信号才停）：
-| 项 | 默认值 | 触发后 |
-|---|---|---|
-| 连续失败次数上限 | 2 | 立即停，**不重试** |
-| 风控关键词 | "滑块/验证码/操作过于频繁/请重新登录" | 抛 RiskTriggered 退出码 2 |
-| 夜禁时段 | 1:00 – 6:00 | 阻止运行；`ALIMAMA_BYPASS_CURFEW=1` 可绕 |
+作者自己的店每天都在用。只要是正常范围内的查询，基本没遇到过风控；就算碰上，淘宝也只是弹一个验证提醒。
 
-**软建议**（不停止，只 stderr 提示）：
 | 项 | 默认值 | 触发后 |
 |---|---|---|
 | 请求间隔（随机抖动） | 1.8 ~ 3.5 秒 | 自动等待 |
-| 累计请求软警告点 | 200 次 | stderr 提醒一次，**继续运行** |
+| 累计请求提醒 | 200 次 | 提醒一次，**继续运行** |
 | 可选硬上限 | 无（默认不启用）| 设 `ALIMAMA_REQUEST_LIMIT=N` 启用，达到 N 次停 |
+| 风控关键词 | "滑块/验证码/操作过于频繁/请重新登录/异常请求/风控/需要登录" | 停下，退出码 3；请用户在浏览器里过一下验证再继续 |
+| 写操作 | 名字像写操作的接口一律拒绝；插件只放行逐个登记的查询接口 | 拒绝调用 |
 
 **风控按"短时高频"判定，不按总量** — 日常批量拉报表无问题。
-
-**绝不调用任何含 add/create/modify/update/delete/save/batch 的接口**。
 
 ---
 
@@ -348,15 +326,15 @@ body: {bizCode, byPage:false, fromRealTime:true, startTime, endTime,
 
 ```bash
 DATE=$(date -v-1d +%Y-%m-%d)
-~/.claude/skills/alimama-cli/scripts/alimama.sh charge-summary --date $DATE --out /tmp/wxt-$DATE.json
-~/.claude/skills/alimama-cli/scripts/alimama.sh report-campaign --date $DATE --limit 10 --out /tmp/wxt-camp-$DATE.json
+scripts/alimama.sh charge-summary --date $DATE --out /tmp/wxt-$DATE.json
+scripts/alimama.sh report-campaign --date $DATE --limit 10 --out /tmp/wxt-camp-$DATE.json
 # 然后读两个 JSON，告诉用户：总花费 / ROI / Top 3 计划 / Bottom 3 计划
 ```
 
 ### 场景 2：用户问"现在哪些关键词推广计划在跑"
 
 ```bash
-~/.claude/skills/alimama-cli/scripts/alimama.sh promo-keyword --limit 30 --out /tmp/promo-kw.json
+scripts/alimama.sh promo-keyword --limit 30 --out /tmp/promo-kw.json
 # 读 JSON，告诉用户：共 N 个计划，X 个在投，Y 个暂停，前 5 个按预算
 ```
 
@@ -364,7 +342,7 @@ DATE=$(date -v-1d +%Y-%m-%d)
 
 ```bash
 DATE=$(date -v-1d +%Y-%m-%d)
-~/.claude/skills/alimama-cli/scripts/alimama.sh report-campaign --date $DATE --limit 100 --raw \
+scripts/alimama.sh report-campaign --date $DATE --limit 100 --raw \
   | jq '[.data.list[] | select(.charge > 50 and .roi < 1)]'
 ```
 
@@ -374,39 +352,17 @@ DATE=$(date -v-1d +%Y-%m-%d)
 
 | 现象 | 原因 | 处理 |
 |---|---|---|
-| `doctor` 报"未找到 alimama 登录态" | Chrome 没登录 one.alimama.com | 去 Chrome 打开 one.alimama.com 一次 |
-| Windows 首次运行打开 Chrome/Edge | 正在创建 CLI 专用登录环境 | 登录一次，CLI 会自动检测并继续；以后无需重复登录 |
-| Windows 等待登录超时 | 5 分钟内没有完成登录 | 保留浏览器窗口，登录后重新运行；可用 `ALIMAMA_LOGIN_TIMEOUT` 调整秒数 |
-| Windows 找不到浏览器 | Chrome/Edge 未安装在常规位置 | 设置 `ALIMAMA_BROWSER_PATH` 指向 `chrome.exe` 或 `msedge.exe` |
-| Windows 报 `AppData\Roaming\uv\python: 拒绝访问` | AI 沙箱只允许访问工作区 | 更新 CLI 后运行 `scripts\alimama.cmd doctor`；新版会把 Python、依赖和登录 Profile 放在项目内 |
+| `doctor` 报未登录、登录失效 | Chrome 没登录 one.alimama.com | 请用户在 Chrome 打开 one.alimama.com 登录 |
+| 「子账号需要有权限」/「用于会话的 cookie 异常」 | 当前账号没有万相台权限 | 换有权限的账号登录 |
+| 「没有连上浏览器插件」 | 插件没装、被停用，或 Chrome 没开 | 照 `extension/README.md` 装好；插件每 30 秒检查一次，等一会儿再试 |
+| 插件「太旧」或「文件夹不见了」 | 装的是旧版，或当初加载的文件夹被删了 | `chrome://extensions` 移除旧的取数桥，再加载本目录的 `extension/unpacked` |
+| Windows 报 `AppData\Roaming\uv\python: 拒绝访问` | AI 沙箱只允许访问工作区 | 运行 `scripts\alimama.cmd doctor`；Python、依赖和运行数据都放在本目录的 `.runtime/` 里 |
 | 任意子命令返回 list:[] 但 count > 0 | 缺关键参数（如 orderBy） | CLI 已内置正确参数，正常不会遇到 |
-| `RiskTriggered: 滑块` | 触发风控 | **立即停 24 小时**，不要重试 |
-| HTTP 5810 / "需要登录" | session 超时 | 去 Chrome 重新打开 one.alimama.com |
-| 报错 "夜间禁跑" | 当前 1:00–6:00 | `ALIMAMA_BYPASS_CURFEW=1 alimama-cli ...` |
-
-## 反编译笔记（接口情报）
-
-来自 `https://g.alicdn.com/mm/onebp/<version>/onebp/merge.js` 和实际 HAR 抓包。
-
-**统一鉴权**：
-- macOS Cookie 从本机 Chrome 直读；Windows 从 CLI 专用 Chrome/Edge 的 CDP 读取
-- Windows 的 `.runtime/` 包含登录 Profile，已被 Git 忽略；不要提交、打包或分享
-- 所有 POST 自动注入 URL `?bizCode=universalBP&csrfId=xxx`
-- csrfId 启动时一次性 `POST /member/checkAccess.json` 拿，进程内缓存
-- **无动态 sign，无 WASM 加密**（跟 sycm 同档简单）
-
-**关键接口映射**：
-- 报表通用入口：`POST /report/query.json` + `rptType` + `queryDomains`
-- 营销场景汇总：`POST /report/chargeSum.json`
-- 推广列表通用：`POST /campaign/horizontal/findPage.json?bizCode=X`
-
-详细字段说明见 [README.md](README.md)（含完整模块树）。
-
----
+| 提示触发风控（退出码 3） | 万相台弹了验证 | 停下，请用户在浏览器里打开万相台过一下验证，再继续 |
 
 ## 局限性
 
-- 只覆盖**读**接口；操作类（创建/调价/暂停）故意不做（避免误操作烧钱）
+- 只覆盖**读**接口；创建/调价/开关/删除一律不做（避免误操作烧钱）
 - 推广类只做了 3 种（关键词/人群/全站），其他（店铺直选/内容营销/智惠券）未做
 - 部分 row 字段（如 `bidUnit`）服务端可能返回 None，CLI 已处理但不保证完美
 - 不同 `--window`（1/7/15 天）会影响转化数据，默认 15

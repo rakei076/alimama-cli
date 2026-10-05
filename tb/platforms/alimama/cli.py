@@ -1,19 +1,14 @@
-#!/usr/bin/env python3
-"""alimama-cli — 万相台 AI 无界 (one.alimama.com) 只读数据查询 CLI
+"""万相台 AI 无界 (one.alimama.com) 只读数据查询命令：tb alimama <命令>。
 
-跨平台本地认证模型：
-- macOS: browser_cookie3 从 Chrome 直接读 alimama.com cookies
-- Windows: 专用 Chrome/Edge Profile + CDP 自动取得浏览器已解密 cookies
-- curl_cffi 伪 TLS 指纹直调万相台 onebp API
-- 不导出 Cookie，不关闭浏览器安全保护，不接管用户默认 Profile
-
+取数方式与其他平台一样（见 tb/core/transport.py）：浏览器插件优先；Mac 上没装插件就读 Chrome 的 cookie。
+读取接口全是 POST，插件只放行 Platform.bridge_posts 里登记的查询接口。
+请求、登录判断、风控词、护栏（请求数提醒 / 间隔）都在 tb.core 里，这里只放接口清单、参数拼装和输出。
 接口完全反向工程自万相台 onebp 客户端 JS（onebp/merge bundle）。
-查询类命令全部只读；唯一写操作 promo-off（按宝贝ID关停在投单元）默认 dry-run，
-必须 --execute 才执行，且只关单元(pause)，不调价/不删除/不新建。
+查询类命令全部只读。唯一的写操作（按宝贝关停单元）单独放在 promo_off.py，只有私人版带这个文件。
 
 子命令：
-    doctor               检查 cookie 与登录态
-    api <path>           通用 POST 接口探测
+    doctor               检查登录态
+    api <path>           通用 POST 接口探测（拒绝写操作）
     account-balance      账户余额（无日期）
     activity-list        活动列表（日期范围）
     campaign-list        计划列表（日期范围）
@@ -24,413 +19,82 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
-import platform
-import random
-import shutil
-import socket
-import subprocess
 import sys
-import time
-import urllib.error
-import urllib.request
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
+from urllib.parse import parse_qsl
 
-import browser_cookie3
-from curl_cffi import requests
+from ...core import transport
+from ...core.auth import NotLoggedIn
+from ...core.client import Client
+from ...core.errors import TbError
+from .platform import ALIMAMA
 
-USER_AGENT = (
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-    "AppleWebKit/537.36 (KHTML, like Gecko) "
-    "Chrome/148.0.0.0 Safari/537.36"
-)
-
-API_HOST = "https://one.alimama.com"
-REFERER_DETAIL_PAGE = "https://one.alimama.com/index.html"
-
-RISK_KEYWORDS = ("滑块", "验证码", "操作过于频繁", "请重新登录", "异常请求", "风控", "需要登录")
-
-# 安全护栏
-MIN_DELAY_SEC = 1.8
-MAX_DELAY_SEC = 3.5
-MAX_CONSECUTIVE_FAILS = 2
-# 单请求超时（秒）。万相台 onebpSearch 等接口服务端响应偏慢，默认 30，可用 env 覆盖。
-REQUEST_TIMEOUT = int(os.environ.get("ALIMAMA_TIMEOUT", "30"))
-MAX_RETRIES = int(os.environ.get("ALIMAMA_RETRIES", "2"))
-RETRY_BASE_SEC = float(os.environ.get("ALIMAMA_RETRY_BASE_SEC", "1"))
-# 请求数策略（建议性，不硬停）：
-#   达到 SOFT_WARN_AT 在 stderr 打一次温和提醒；不停止运行。
-#   如果要兜底（脚本跑飞），设环境变量 ALIMAMA_REQUEST_LIMIT=数字。
-REQUEST_SOFT_WARN_AT = 200
+API_HOST = ALIMAMA.hosts["main"]
+REFERER_DETAIL_PAGE = ALIMAMA.referer
 
 
-class RiskTriggered(RuntimeError):
-    pass
+class ClientCookies:
+    """cookie 的「凭据句柄」：命令函数里一路传的 `cookies` 其实是它，真正的连接在 .client 里。
+    像 dict 一样能 .get / in / len，读取走 client.cookie()。"""
+
+    def __init__(self, client: Client):
+        self.client = client
+
+    def get(self, name: str, default: str | None = None) -> str | None:
+        return self.client.cookie(name) or default
+
+    def __contains__(self, name: str) -> bool:
+        return bool(self.get(name))
+
+    def __len__(self) -> int:
+        return len(self.client.cookies)
 
 
-def _sleep_humanlike() -> None:
-    time.sleep(random.uniform(MIN_DELAY_SEC, MAX_DELAY_SEC))
+_CLIENT: Client | None = None
 
 
-def _has_login_cookie(cookies: dict[str, str]) -> bool:
-    return "cookie2" in cookies or "unb" in cookies
+def load_alimama_cookies() -> ClientCookies:
+    """取当前应使用的登录态（一次运行只建一个连接）。"""
+    global _CLIENT
+    if _CLIENT is None:
+        _CLIENT = transport.make_client(ALIMAMA)
+    return ClientCookies(_CLIENT)
 
 
-def _cookie_dict(items: list[dict[str, Any]]) -> dict[str, str]:
-    cookies: dict[str, str] = {}
-    # one.alimama.com 最后写入，使同名 cookie 优先采用目标站点的值。
-    for target_domain in ("", "one.alimama.com"):
-        for cookie in items:
-            domain = str(cookie.get("domain") or "")
-            if "alimama.com" not in domain and "taobao.com" not in domain:
-                continue
-            if target_domain and target_domain not in domain:
-                continue
-            if not target_domain and "one.alimama.com" in domain:
-                continue
-            name = cookie.get("name")
-            value = cookie.get("value")
-            if name and value is not None:
-                cookies[str(name)] = str(value)
-    return cookies
-
-
-def _windows_state_dir() -> Path:
-    override = os.environ.get("ALIMAMA_STATE_DIR")
-    if override:
-        return Path(override).expanduser()
-    root = os.environ.get("LOCALAPPDATA") or os.environ.get("APPDATA")
-    if not root:
-        root = str(Path.home() / "AppData" / "Local")
-    return Path(root) / "alimama-cli"
-
-
-def _find_windows_browser() -> Path:
-    override = os.environ.get("ALIMAMA_BROWSER_PATH")
-    candidates = [Path(override)] if override else []
-    for env_name in ("PROGRAMFILES", "PROGRAMFILES(X86)", "LOCALAPPDATA"):
-        base = os.environ.get(env_name)
-        if not base:
-            continue
-        candidates.extend([
-            Path(base) / "Google/Chrome/Application/chrome.exe",
-            Path(base) / "Microsoft/Edge/Application/msedge.exe",
-        ])
-    for name in ("chrome.exe", "msedge.exe", "chrome", "msedge"):
-        found = shutil.which(name)
-        if found:
-            candidates.append(Path(found))
-    for candidate in candidates:
-        if candidate.is_file():
-            return candidate
-    raise RuntimeError(
-        "未找到 Chrome 或 Edge。请安装浏览器，或设置 ALIMAMA_BROWSER_PATH 指向 chrome.exe。"
-    )
-
-
-def _free_local_port() -> int:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-        sock.bind(("127.0.0.1", 0))
-        return int(sock.getsockname()[1])
-
-
-def _read_json(url: str, timeout: float = 1.5) -> Any:
-    with urllib.request.urlopen(url, timeout=timeout) as response:
-        return json.loads(response.read().decode("utf-8"))
-
-
-def _cdp_targets(port: int) -> list[dict[str, Any]]:
-    try:
-        data = _read_json(f"http://127.0.0.1:{port}/json/list")
-        return data if isinstance(data, list) else []
-    except (OSError, urllib.error.URLError, ValueError):
-        return []
-
-
-def _wait_for_cdp(port: int, timeout: float = 15) -> list[dict[str, Any]]:
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        targets = _cdp_targets(port)
-        if targets:
-            return targets
-        time.sleep(0.25)
-    raise RuntimeError("Chrome 启动超时，未能建立自动登录连接。")
-
-
-def _cdp_cookies(port: int) -> dict[str, str]:
-    try:
-        from websocket import create_connection
-    except ImportError as exc:
-        raise RuntimeError("缺少 websocket-client，请重新运行安装命令。") from exc
-
-    targets = _wait_for_cdp(port)
-    target = next((t for t in targets if t.get("type") == "page"), targets[0])
-    ws_url = target.get("webSocketDebuggerUrl")
-    if not ws_url:
-        raise RuntimeError("Chrome 没有提供 CDP WebSocket 地址。")
-    ws = create_connection(ws_url, timeout=5, origin=f"http://127.0.0.1:{port}")
-    try:
-        ws.send(json.dumps({"id": 1, "method": "Network.getAllCookies"}))
-        while True:
-            message = json.loads(ws.recv())
-            if message.get("id") == 1:
-                if message.get("error"):
-                    raise RuntimeError(f"Chrome 读取 Cookie 失败：{message['error']}")
-                return _cookie_dict((message.get("result") or {}).get("cookies") or [])
-    finally:
-        ws.close()
-
-
-def _wait_for_windows_login(port: int, marker_file: Path) -> dict[str, str]:
-    print("首次使用或登录已过期，请在打开的浏览器中登录阿里妈妈；成功后会自动继续。", file=sys.stderr)
-    deadline = time.time() + int(os.environ.get("ALIMAMA_LOGIN_TIMEOUT", "300"))
-    while time.time() < deadline:
-        cookies = _cdp_cookies(port)
-        if _has_login_cookie(cookies):
-            marker_file.touch()
-            return cookies
-        time.sleep(2)
-    raise RuntimeError("等待登录超时。请保留浏览器窗口，登录后重新运行命令。")
-
-
-def _windows_cdp_cookies() -> dict[str, str]:
-    state_dir = _windows_state_dir()
-    state_dir.mkdir(parents=True, exist_ok=True)
-    port_file = state_dir / "cdp-port"
-    marker_file = state_dir / "login-ready"
-
-    if port_file.exists():
-        try:
-            port = int(port_file.read_text(encoding="utf-8").strip())
-            cookies = _cdp_cookies(port)
-        except (OSError, ValueError, RuntimeError):
-            pass
-        else:
-            if _has_login_cookie(cookies):
-                return cookies
-            return _wait_for_windows_login(port, marker_file)
-
-    port = _free_local_port()
-    browser = _find_windows_browser()
-    profile_dir = state_dir / "chrome-profile"
-    args = [
-        str(browser),
-        f"--remote-debugging-port={port}",
-        "--remote-debugging-address=127.0.0.1",
-        "--remote-allow-origins=*",
-        f"--user-data-dir={profile_dir}",
-        "--no-first-run",
-        "--no-default-browser-check",
-        "--new-window",
-        REFERER_DETAIL_PAGE,
-    ]
-    if marker_file.exists():
-        args.insert(-2, "--start-minimized")
-    try:
-        subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    except OSError as exc:
-        raise RuntimeError(f"无法启动浏览器：{exc}") from exc
-    port_file.write_text(str(port), encoding="utf-8")
-    _wait_for_cdp(port)
-
-    return _wait_for_windows_login(port, marker_file)
-
-
-def _chrome_cookie_file() -> str | None:
-    """若设了 ALIMAMA_CHROME_PROFILE（如 "Profile 1"），返回该 Chrome 身份的 Cookies 文件路径；
-    未设则返回 None，browser_cookie3 走默认身份不变。"""
-    prof = os.environ.get("ALIMAMA_CHROME_PROFILE")
-    if not prof:
-        return None
-    p = Path.home() / "Library/Application Support/Google/Chrome" / prof / "Cookies"
-    return str(p)
-
-
-def load_alimama_cookies() -> dict[str, str]:
-    """从 Chrome 读取 alimama.com 域所有 cookies。
-
-    万相台和淘宝共享阿里通用登录 cookie，但鉴权域是 alimama.com。
-    常见登录态 cookie：cookie2 / _tb_token_ / unb / cna / sgcookie。
-    """
-    if platform.system() == "Windows":
-        return _windows_cdp_cookies()
-
-    jar = browser_cookie3.chrome(domain_name="alimama.com", cookie_file=_chrome_cookie_file())
-    cookies: dict[str, str] = {}
-    # 优先级：one.alimama.com > .alimama.com > 其他子域
-    # 通过两遍写入：先非 one，再 one，让 one 覆盖
-    for c in jar:
-        if c.domain and ("alimama.com" in c.domain or "taobao.com" in c.domain):
-            if "one.alimama.com" not in c.domain:
-                cookies[c.name] = c.value
-    for c in jar:
-        if c.domain and "one.alimama.com" in c.domain:
-            cookies[c.name] = c.value
-    if not _has_login_cookie(cookies):
-        raise RuntimeError(
-            "未找到阿里妈妈登录态。请在 Chrome 里打开并登录 https://one.alimama.com 后重试。"
-            '若登录态在别的 Chrome 身份，设 ALIMAMA_CHROME_PROFILE="Profile 1" 重试。'
-        )
-    return cookies
-
-
-def _check_risk(text: str) -> None:
-    for kw in RISK_KEYWORDS:
-        if kw in text:
-            raise RiskTriggered(f"响应含 '{kw}'，立即停止")
-
-
-_request_count = 0
-_consecutive_fails = 0
-_csrf_id: str | None = None  # 由 ensure_csrf() 注入
-
-
-def _validate_business_response(payload: dict[str, Any]) -> None:
-    info = payload.get("info")
-    if not isinstance(info, dict):
-        return
-    if info.get("ok") is False or info.get("errorCode"):
-        raise RuntimeError(
-            f"万相台业务失败 errorCode={info.get('errorCode')}: {info.get('message') or ''}"
-        )
-
-
-def ensure_csrf(cookies: dict[str, str]) -> str:
-    """首次调用：POST /member/checkAccess.json 拿到 csrfId 并缓存。
+def ensure_csrf(cookies: ClientCookies) -> str:
+    """csrfId：首次调用时 POST /member/checkAccess.json 取得并缓存（底座的 prepare 钩子做）。
 
     万相台所有数据接口要求 URL 带 ?csrfId=xxx，否则 "bizLogin csrf检查未通过"。
-    csrfId 在本进程内只取一次。
     """
-    global _csrf_id
-    if _csrf_id:
-        return _csrf_id
-    data = _api_call(
-        "/member/checkAccess.json",
-        body={"bizCode": "universalBP"},
-        method="POST",
-        cookies=cookies,
-        skip_csrf=True,
-    )
-    csrf = (data.get("data") or {}).get("accessInfo", {}).get("csrfId")
-    if not csrf:
-        raise RuntimeError(f"无法从 checkAccess 拿到 csrfId: {json.dumps(data, ensure_ascii=False)[:200]}")
-    _csrf_id = csrf
-    return csrf
+    cookies.client.whoami()
+    return cookies.client.state["csrf"]
 
 
 def _api_call(
     path: str,
     body: dict[str, Any] | None = None,
     method: str = "POST",
-    cookies: dict[str, str] | None = None,
+    cookies: ClientCookies | None = None,
     referer: str | None = None,
     biz_code: str = "universalBP",
-    skip_csrf: bool = False,
+    write: bool = False,
 ) -> dict[str, Any]:
-    """对万相台 API 做一次 POST/GET，带安全护栏。
+    """对万相台 API 做一次 POST/GET，返回完整响应。
 
-    path 必须以 `/` 开头（拼到 https://one.alimama.com 后）。
-    POST 默认 application/json，body 自动 JSON 序列化。
-    所有请求 URL 自动带 ?bizCode=universalBP（onebp 全局必填参数）。
+    path 必须以 `/` 开头（拼到 https://one.alimama.com 后），可以自带查询串（如 ?bizCode=xxx）。
+    所有请求 URL 自动带 bizCode=universalBP 和 csrfId（底座的 build_request 钩子做）。
+    write=True 只给 Platform.write_allow 里登记的写接口用，不自动重试。
     """
-    global _request_count, _consecutive_fails
-
-    # 软警告：达到阈值在 stderr 提醒一次，不停止
-    if _request_count == REQUEST_SOFT_WARN_AT:
-        print(
-            f"⚠️  已发出 {REQUEST_SOFT_WARN_AT} 次请求 — 大批量正常，但建议留意：风控通常按"
-            f"\"短时高频\"判断而不是\"总量\"，每个请求间隔 1.8~3.5 秒已经足够。继续运行。",
-            file=sys.stderr,
-        )
-    # 可选硬上限（环境变量），默认无
-    hard_limit_env = os.environ.get("ALIMAMA_REQUEST_LIMIT")
-    if hard_limit_env and hard_limit_env.isdigit():
-        hard_limit = int(hard_limit_env)
-        if _request_count >= hard_limit:
-            raise RuntimeError(
-                f"达到自定义硬上限 ALIMAMA_REQUEST_LIMIT={hard_limit}，停止。"
-                f"如要继续：unset ALIMAMA_REQUEST_LIMIT 或调大它。"
-            )
-
-    hour = datetime.now().hour
-    if 1 <= hour < 6 and not os.environ.get("ALIMAMA_BYPASS_CURFEW"):
-        raise RuntimeError(
-            f"夜间禁跑时段 (1:00–6:00)，当前 {hour} 点。"
-            f"如需强制运行：ALIMAMA_BYPASS_CURFEW=1 ..."
-        )
-
-    if not path.startswith("/"):
-        path = "/" + path
-    # 自动注入 bizCode（除非 path 已含）
-    sep = "&" if "?" in path else "?"
-    if "bizCode=" not in path:
-        path = f"{path}{sep}bizCode={biz_code}"
-        sep = "&"
-    # 自动注入 csrfId（万相台 onebp 全局 CSRF 校验）
-    if not skip_csrf and "csrfId=" not in path:
-        csrf = ensure_csrf(cookies or {})
-        path = f"{path}{sep}csrfId={csrf}"
-    url = f"{API_HOST}{path}"
-
-    headers = {
-        "User-Agent": USER_AGENT,
-        "Referer": referer or REFERER_DETAIL_PAGE,
-        "Origin": API_HOST,
-        "Accept": "application/json, text/plain, */*",
-        "Accept-Language": "zh-CN,zh;q=0.9,ja;q=0.8,en;q=0.7",
-    }
-    if cookies and "XSRF-TOKEN" in cookies:
-        headers["X-XSRF-TOKEN"] = cookies["XSRF-TOKEN"]
-    # 浏览器 same-origin 标识 — 让服务端识别为浏览器同源 XHR
-    headers["Sec-Fetch-Site"] = "same-origin"
-    headers["Sec-Fetch-Mode"] = "cors"
-    headers["Sec-Fetch-Dest"] = "empty"
-    headers["X-Requested-With"] = "XMLHttpRequest"
-
-    last_error: Exception | None = None
-    for attempt in range(MAX_RETRIES + 1):
-        try:
-            if method.upper() == "POST":
-                headers["Content-Type"] = "application/json"
-                resp = requests.post(
-                    url, json=body or {}, cookies=cookies, headers=headers,
-                    impersonate="chrome120", timeout=REQUEST_TIMEOUT,
-                )
-            else:
-                resp = requests.get(
-                    url, params=body or {}, cookies=cookies, headers=headers,
-                    impersonate="chrome120", timeout=REQUEST_TIMEOUT,
-                )
-            _request_count += 1
-        except requests.exceptions.RequestException as e:
-            last_error = e
-            if attempt < MAX_RETRIES:
-                time.sleep(RETRY_BASE_SEC * (2 ** attempt))
-                continue
-            break
-
-        if resp.status_code >= 500 and attempt < MAX_RETRIES:
-            last_error = RuntimeError(f"HTTP {resp.status_code}")
-            time.sleep(RETRY_BASE_SEC * (2 ** attempt))
-            continue
-        if resp.status_code != 200:
-            _consecutive_fails += 1
-            raise RuntimeError(f"HTTP {resp.status_code}: {resp.text[:300]}")
-        _check_risk(resp.text)
-        try:
-            payload = resp.json()
-        except Exception as e:
-            raise RuntimeError(f"响应非 JSON: {resp.text[:300]}") from e
-        _validate_business_response(payload)
-        _consecutive_fails = 0
-        return payload
-
-    _consecutive_fails += 1
-    raise RuntimeError(
-        f"请求失败，已重试 {MAX_RETRIES} 次: {last_error}"
-    ) from last_error
+    client = (cookies or load_alimama_cookies()).client
+    bare, _, query = path.partition("?")
+    params = dict(parse_qsl(query))
+    params.setdefault("bizCode", biz_code)
+    headers = {"Referer": referer or REFERER_DETAIL_PAGE}
+    if method.upper() == "POST":
+        return client.post("main", bare, body or {}, params=params, raw=True, headers=headers, write=write)
+    return client.get("main", bare, {**params, **(body or {})}, raw=True, headers=headers)
 
 
 # ---------- 高频只读预设注册表 ----------
@@ -507,13 +171,16 @@ def fetch_preset(preset_name: str, *, start_date: str | None = None, end_date: s
 # ---------- 命令 ----------
 
 def cmd_doctor(args: argparse.Namespace) -> None:
-    print("== alimama-cli doctor ==")
+    print("== tb alimama doctor ==")
     try:
         cookies = load_alimama_cookies()
-        print(f"✓ 读到 {len(cookies)} 个 alimama/taobao 域 cookie")
-        for k in ("cookie2", "unb", "_tb_token_", "cna", "sgcookie", "_l_g_", "t", "sg"):
+        print(f"✓ 读到 {len(cookies)} 个 alimama/taobao 域 cookie" if len(cookies)
+              else "✓ 通过浏览器插件取数（登录态在浏览器里，不读 cookie 文件）")
+        for k in ("cookie2", "unb", "_tb_token_", "cna", "sgcookie", "_l_g_", "t", "sg") if len(cookies) else ():
             if k in cookies:
                 print(f"✓ {k} = <present>")
+        ensure_csrf(cookies)
+        print("✓ checkAccess 通过，拿到 csrfId（登录态有效）")
         print(f"\nAPI host: {API_HOST}")
         print(f"Referer:  {REFERER_DETAIL_PAGE}")
     except Exception as e:
@@ -522,7 +189,7 @@ def cmd_doctor(args: argparse.Namespace) -> None:
 
 
 def cmd_api(args: argparse.Namespace) -> None:
-    """通用 API 探测命令：alimama-cli api <path> [--method POST] [--body '{"k":"v"}']"""
+    """通用 API 探测命令：tb alimama api <path> [--method POST] [--body '{"k":"v"}']"""
     cookies = load_alimama_cookies()
     body: dict[str, Any] = {}
     if args.body:
@@ -1153,33 +820,6 @@ def _adgroup_unit(ag: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-# ============================ 写操作（需确认后执行） ============================
-# 接口：POST /adgroup/updatePart.json?csrfId=<X>&bizCode=<biz>
-#   body: {"bizCode","adgroupList":[{"campaignId","adgroupId","displayStatus":"pause"|"start"}],"csrfId"}
-#   pause→响应 onlineStatus:0（关）；start→1（开）；成功标志 errorCount:0
-#   (HAR 实测 loginPointId/bx-v 为可选埋点；同一读接口不带也成，故省略)
-
-def set_adgroups_status(biz_code: str, units: list[dict[str, Any]], status: str,
-                        cookies: dict[str, str]) -> dict[str, Any]:
-    """把若干单元(adgroup)批量设为 pause / start。写操作。
-
-    units: 每项含 campaignId / adgroupId。status: "pause" 关 / "start" 开。
-    """
-    if status not in ("pause", "start"):
-        raise ValueError("status 只能是 pause 或 start")
-    csrf = ensure_csrf(cookies)
-    body = {
-        "bizCode": biz_code,
-        "adgroupList": [
-            {"campaignId": u["campaignId"], "adgroupId": u["adgroupId"], "displayStatus": status}
-            for u in units
-        ],
-        "csrfId": csrf,
-    }
-    return _api_call(f"/adgroup/updatePart.json?bizCode={biz_code}",
-                     body, method="POST", cookies=cookies)
-
-
 def fetch_promo_campaigns(*, biz_code: str, page_size: int = 20, offset: int = 0,
                            status_list: list[str] | None = None,
                            adgroup_required: bool = True,
@@ -1397,66 +1037,6 @@ def cmd_promo_units(args: argparse.Namespace) -> None:
         lab = "🟢开" if u["on"] else "🔴关"
         print(f"{lab:<6}{str(u['itemId'] or '—'):<16}{str(u['campaignId']):<14}{(u['campaignName'] or '')[:22]}")
     print("-" * 70)
-
-
-def cmd_promo_off(args: argparse.Namespace) -> None:
-    """按宝贝ID关停：把该商品散落在各计划里、当前【在投】的单元全部 pause。
-
-    ⚠️ 写操作。默认 dry-run（只列清单不执行）；加 --execute 才真正关。
-    """
-    item = str(args.item)
-    biz_keys = [args.biz] if getattr(args, "biz", None) else list(PROMO_BIZ_CODES)
-    cookies = load_alimama_cookies()
-
-    # 收集该商品当前在投(onlineStatus==1)的单元，按玩法分组
-    # 服务端按 itemId 过滤（实测返回该商品在各计划的全部单元），不再全量拉
-    targets: dict[str, list[dict[str, Any]]] = {}
-    for key in biz_keys:
-        biz_code = PROMO_BIZ_CODES[key][0]
-        for ag in fetch_all_adgroups(biz_code, status_list=["start", "pause"],
-                                     item_id=item, cookies=cookies):
-            u = _adgroup_unit(ag)
-            if u["itemId"] == item and u["on"]:
-                targets.setdefault(biz_code, []).append(u)
-
-    total = sum(len(v) for v in targets.values())
-    label_of = {b: lbl for b, lbl in PROMO_BIZ_CODES.values()}
-
-    print(f"# 按宝贝ID关停  宝贝 {item}")
-    print(f"# 当前在投(将被关闭)的单元: {total} 个\n")
-    if total == 0:
-        print("没有「在投」状态的单元，无需操作。")
-        return
-
-    print(f"{'玩法':<10}{'计划ID':<14}{'单元ID':<14}计划名")
-    print("-" * 64)
-    for biz_code, units in targets.items():
-        for u in units:
-            print(f"{label_of.get(biz_code, biz_code):<10}{str(u['campaignId']):<14}{str(u['adgroupId']):<14}{(u['campaignName'] or '')[:20]}")
-    print("-" * 64)
-
-    if not args.execute:
-        print(f"\n🔒 DRY-RUN（未执行任何操作）。以上 {total} 个单元将被 pause。")
-        print("   确认无误后，加 --execute 重新运行才会真正关闭。")
-        return
-
-    # ---- 执行（仅在 --execute 时） ----
-    print(f"\n⚡ 执行关停 {total} 个单元 ...")
-    ok = fail = 0
-    for biz_code, units in targets.items():
-        try:
-            resp = set_adgroups_status(biz_code, units, "pause", cookies)
-            err = (resp.get("data") or {}).get("errorCount", -1)
-            if err == 0:
-                ok += len(units)
-                print(f"  ✅ {label_of.get(biz_code)}: {len(units)} 个已关")
-            else:
-                fail += len(units)
-                print(f"  ⚠️ {label_of.get(biz_code)}: errorCount={err}  {json.dumps((resp.get('data') or {}).get('errorDetails'), ensure_ascii=False)[:200]}")
-        except Exception as e:
-            fail += len(units)
-            print(f"  ❌ {label_of.get(biz_code)}: {e}")
-    print(f"\n完成：成功 {ok} / 失败 {fail}")
 
 
 def fetch_scene_summary(biz_code: str, start_date: str, end_date: str, *,
@@ -1733,7 +1313,7 @@ def _add_fields_group(sub: argparse.ArgumentParser) -> None:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(prog="alimama-cli", description=__doc__,
+    p = argparse.ArgumentParser(prog="tb alimama", description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     sp = p.add_subparsers(dest="cmd", required=True)
 
@@ -1743,7 +1323,7 @@ def build_parser() -> argparse.ArgumentParser:
     yesterday = (date.today() - timedelta(days=1)).isoformat()
     two_weeks_ago = (date.today() - timedelta(days=14)).isoformat()
 
-    ap = sp.add_parser("api", help="通用接口探测：alimama-cli api /xxx.json [--body JSON] [-p k=v]")
+    ap = sp.add_parser("api", help="通用接口探测：tb alimama api /xxx.json [--body JSON] [-p k=v]")
     ap.add_argument("path", help='接口路径，如 "/account/checkRealBalance.json"')
     ap.add_argument("--method", default="POST", choices=["POST", "GET"])
     ap.add_argument("--body", help="POST body (JSON 字符串)")
@@ -1785,14 +1365,13 @@ def build_parser() -> argparse.ArgumentParser:
     pu.add_argument("--out", help="输出到文件")
     pu.set_defaults(func=cmd_promo_units)
 
-    # ⚠️ 写操作：按宝贝ID关停。默认 dry-run，必须 --execute 才真正关。
-    po = sp.add_parser("promo-off", help="⚠️写：按宝贝ID关停该商品所有在投单元（默认dry-run，--execute才执行）")
-    po.add_argument("--item", required=True, help="宝贝ID：关掉这个商品散落在各计划里的全部在投单元")
-    po.add_argument("--biz", choices=list(PROMO_BIZ_CODES.keys()),
-                    help="限定玩法（默认扫全部 3 种）")
-    po.add_argument("--execute", action="store_true",
-                    help="真正执行关停（不加=只列清单不动）")
-    po.set_defaults(func=cmd_promo_off)
+    # ⚠️ 唯一的写操作（按宝贝关停单元）在 promo_off.py：只有私人版带这个文件，没有就不注册
+    try:
+        from . import promo_off
+    except ImportError:
+        promo_off = None
+    if promo_off:
+        promo_off.register(sp)
 
     # 推广场景大盘汇总：展现量/点击/花费/成交/ROI/加购…
     ss = sp.add_parser("scene-summary", help="各推广场景大盘汇总（展现量/点击/花费/成交/ROI），默认过去14天")
@@ -1874,24 +1453,38 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
-def main() -> None:
-    # 中文 Windows 的 cmd/SSH 常为 GBK；帮助文本里的 emoji 不应让 CLI 崩溃。
+def _force_utf8() -> None:
+    """中文 Windows 的 cmd/SSH 常为 GBK；帮助文本里的 emoji 不应让 CLI 崩溃。统一用 UTF-8。"""
     for stream in (sys.stdout, sys.stderr):
-        if hasattr(stream, "reconfigure"):
-            stream.reconfigure(errors="replace")
-    args = build_parser().parse_args()
+        try:
+            stream.reconfigure(encoding="utf-8")
+        except (AttributeError, ValueError):
+            pass
+
+
+def main(argv: list[str] | None = None) -> int:
+    global _CLIENT
+    _force_utf8()
+    args = build_parser().parse_args(argv)
+    _CLIENT = None
     try:
         args.func(args)
-    except RiskTriggered as e:
-        print(f"\n⚠️  风险信号触发，已停止：{e}", file=sys.stderr)
-        sys.exit(2)
+        return 0
+    except SystemExit as e:
+        return int(e.code or 0)
+    except NotLoggedIn as e:
+        print(f"✗ {e}", file=sys.stderr)
+        return 2
+    except TbError as e:
+        print(f"✗ {e}", file=sys.stderr)
+        return e.exit_code
     except (RuntimeError, ValueError) as e:
         print(f"✗ {e}", file=sys.stderr)
-        sys.exit(1)
+        return 1
     except KeyboardInterrupt:
         print("\n中断", file=sys.stderr)
-        sys.exit(130)
+        return 130
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
