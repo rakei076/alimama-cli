@@ -1,5 +1,10 @@
 # 万相台 alimama-cli
 
+![License](https://img.shields.io/github/license/rakei076/alimama-cli)
+![Python](https://img.shields.io/badge/python-3.10%2B-blue)
+![Stars](https://img.shields.io/github/stars/rakei076/alimama-cli?style=social)
+![Last Commit](https://img.shields.io/github/last-commit/rakei076/alimama-cli)
+
 > 本 Skill 作者：Rakel · 个人网站：https://rakel.top
 
 让你的 AI 直接读自家店铺的万相台（阿里妈妈）广告数据：花费、投产、计划、单元、关键词、人群、商品报表，看清广告钱花在哪、哪些在浪费。全部只读，在你自己的电脑上运行，用你浏览器里已经登录的账号。
@@ -74,3 +79,29 @@
 ## 协议
 
 MIT。仅供店铺经营者查询自家数据，请遵守平台规则。
+
+
+## 联系作者
+
+有想法、有需求，欢迎加微信找我，并注明来意。想要帮你装好、按你的需求定制，或者想用千牛、达摩盘等更多工具，也可以直接问。
+
+- 微信：扫下方二维码加好友
+- X / Twitter：[@Rakel076](https://x.com/Rakel076)
+
+<p align="center">
+  <img src="assets/wechat-qr.jpg" alt="WeChat QR" width="240">
+</p>
+
+如果这个工具帮到了你，欢迎给个 ⭐️。
+
+---
+
+## Star History
+
+<a href="https://www.star-history.com/?repos=rakei076%2Fsycm-cli%2Crakei076%2Falimama-cli&type=date&legend=top-left">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=rakei076/sycm-cli%2Crakei076/alimama-cli&type=date&theme=dark&legend=top-left&sealed_token=1C-YpKaGC2R31lIvkjjJxJ5-Nic1CJuUI18K8ttteBZoy0ktTZ7ZtH4Das9FbfclXR8d63D7McC7DbIABoPlfFEPPVjrG29Nvo56crqx6KT53wxcUbu8e8qMMgoYWjZC7fTkPi4X5H4u7liA8fp2zUmmQ-c4CABvtjksi6k69cEhKOTppTM48U7VLkac" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=rakei076/sycm-cli%2Crakei076/alimama-cli&type=date&legend=top-left&sealed_token=1C-YpKaGC2R31lIvkjjJxJ5-Nic1CJuUI18K8ttteBZoy0ktTZ7ZtH4Das9FbfclXR8d63D7McC7DbIABoPlfFEPPVjrG29Nvo56crqx6KT53wxcUbu8e8qMMgoYWjZC7fTkPi4X5H4u7liA8fp2zUmmQ-c4CABvtjksi6k69cEhKOTppTM48U7VLkac" />
+   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=rakei076/sycm-cli%2Crakei076/alimama-cli&type=date&legend=top-left&sealed_token=1C-YpKaGC2R31lIvkjjJxJ5-Nic1CJuUI18K8ttteBZoy0ktTZ7ZtH4Das9FbfclXR8d63D7McC7DbIABoPlfFEPPVjrG29Nvo56crqx6KT53wxcUbu8e8qMMgoYWjZC7fTkPi4X5H4u7liA8fp2zUmmQ-c4CABvtjksi6k69cEhKOTppTM48U7VLkac" />
+ </picture>
+</a>
