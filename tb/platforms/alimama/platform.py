@@ -14,7 +14,7 @@ ALIMAMA = Platform(
     display="万相台",
     hosts={"main": "https://one.alimama.com"},
     login_page="https://one.alimama.com/index.html",
-    launch_url="https://one.alimama.com/robots.txt",   # 打开时会先经过淘宝统一登录中转再回来，插件按域名确认落地
+    launch_url="https://one.alimama.com/index.html",   # 用首页：robots.txt 经登录中转会被拦成 referer_forbidden；首页中转后回来，插件按域名确认落地
     # 登录态 cookie2/unb 住在 .taobao.com（阿里通用登录），.alimama.com 下只有 wk_ 前缀的同义版本，所以必须连 taobao 域一起读。
     login_cookies=("cookie2", "unb"),
     cookie_domains=("taobao.com", "tmall.com", "alimama.com", "one.alimama.com"),

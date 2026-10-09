@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -686,32 +687,6 @@ def _promo_item(row: dict[str, Any]) -> tuple[str | None, str | None]:
     return None, None
 
 
-def _promo_all_items(row: dict[str, Any]) -> list[dict[str, Any]]:
-    """列出一个计划下的所有商品（单元）及其开关状态。
-
-    每个单元 (adgroup) = 一个商品：
-      material.materialId → 宝贝 ID
-      material.title      → 标题（商品被删除/下架时取不到）
-      onlineStatus        → 开关：1=投放中 / 0=未投放
-    """
-    out: list[dict[str, Any]] = []
-    for ag in (row.get("adgroupList") or []):
-        ag = ag or {}
-        mat = ag.get("material") or {}
-        mid = mat.get("materialId")
-        if not mid:
-            continue
-        online = ag.get("onlineStatus")
-        out.append({
-            "itemId": str(mid),
-            "title": mat.get("title") or mat.get("itemTitle"),
-            "onlineStatus": online,
-            "on": online == 1,
-            "adgroupId": ag.get("adgroupId"),
-        })
-    return out
-
-
 def find_promo_campaign(campaign_id: int, *, biz_code: str | None = None,
                         cookies: dict[str, str] | None = None) -> tuple[dict[str, Any] | None, str | None]:
     """按计划 ID 在推广列表里定位某个计划（带单元）。
@@ -1315,6 +1290,8 @@ def _add_fields_group(sub: argparse.ArgumentParser) -> None:
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="tb alimama", description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
+    p.add_argument("--mode", choices=["auto", "extension", "cookies"],
+                   help="取数方式：extension=浏览器插件；cookies=读浏览器登录；默认 auto")
     sp = p.add_subparsers(dest="cmd", required=True)
 
     d = sp.add_parser("doctor", help="检查 cookie / 登录态")
@@ -1467,6 +1444,8 @@ def main(argv: list[str] | None = None) -> int:
     _force_utf8()
     args = build_parser().parse_args(argv)
     _CLIENT = None
+    if getattr(args, "mode", None):
+        os.environ["ALIMAMA_MODE"] = args.mode
     try:
         args.func(args)
         return 0
