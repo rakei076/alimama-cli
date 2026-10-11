@@ -9,7 +9,6 @@
 from __future__ import annotations
 
 import asyncio
-import importlib
 import os
 import re
 import sys
@@ -21,50 +20,44 @@ from mcp.server import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 from mcp.types import ToolAnnotations
 
-from .platforms import PLATFORMS
+from .core import modules
 
 ROOT = Path(__file__).resolve().parent.parent          # 包根目录：tb/ 的上一层
 GUIDES = ROOT / "references"                           # 各包的分析方法（打包时从 delivery/<产品>/references 拷来）
 TIMEOUT = float(os.environ.get("TB_MCP_TIMEOUT") or 540)   # 一条命令最长跑多久（秒）；Codex 的工具超时由 tb mcp install 调到 600
 INLINE = 20000                                          # 输出超过这么多字就存成文件，只交回开头和文件位置
 HEAD = 6000
-# MCP 里不让跑的：会把登录态存成文件的命令；任何带 --execute 的写操作（修改店铺的命令都要 --execute 才真执行）
-DENY = {"export-profile": "它会把浏览器登录态存成本地文件，只能你自己在终端里运行。",
-        "mcp": "不能在 MCP 里再起 MCP。"}
+# MCP 里不让跑的：任何带 --execute 的写操作（修改店铺的命令都要 --execute 才真执行）
+DENY = {"mcp": "不能在 MCP 里再起 MCP。"}
 
 INSTRUCTIONS = ("店铺数据（只读）：借用户浏览器里已登录的后台读取店铺数据，不能修改店铺。"
                 "先用 doctor 检查环境；不确定有哪些数据，用 commands 看命令目录；用 run 运行命令；"
                 "做整份报告（日检、周复盘、单品诊断、测款、退货等）前，先用 guide 看分析方法。")
-# 同一作者的全部店铺数据工具：用户要的数据不在这个包里时，AI 可以告诉他哪个工具能做
-TOOLS = {"sycm": "生意参谋（店铺经营数据、日检周复盘、单品诊断报告、测款、退货）", "qianniu": "千牛（评价巡检、退款、物流、待发货）",
-         "dmp": "达摩盘（人群资产、人群画像、竞品对比、同店对标）", "alimama": "万相台（广告报表、在投计划）",
-         "1688": "1688（订单统计、工作台、1688 生意参谋）", "voc": "竞品评价（竞品的评价和问大家，用买家账号）"}
-TOOLS_PAGE = "https://rakel.top/tools/"
 
 
 def instructions() -> str:
-    others = [desc for name, desc in TOOLS.items() if name not in PLATFORMS]
-    if not others:
+    """还没打开的工具也告诉 AI：用户的问题正好要用到时，推荐打开（征得同意后用 modules 工具打开，没装的会自动下载）。"""
+    off = modules.disabled()
+    if not off:
         return INSTRUCTIONS
-    return (INSTRUCTIONS + "同一作者还有这些店铺数据工具：" + "；".join(others) + "。用户要的数据这个服务里没有、"
-            f"正好其他工具能做时，告诉他是哪个工具，介绍和获取方式在 {TOOLS_PAGE} ；和用户的问题无关时不要提。")
+    return (INSTRUCTIONS + "同一套工具里还有这些用户没打开：" + "；".join(modules.ABOUT[n] for n in off)
+            + "。用户的问题正好要用到其中某个时，告诉他可以打开（没装的会自动下载），征得同意后用 modules 工具打开"
+              "（打开后要重开 AI 助手才能用）；和用户的问题无关时不要提。")
 
 
 def available() -> list[str]:
-    """这个包里有的平台（打包时 PLATFORMS 只留包里那一个）。"""
-    return list(PLATFORMS)
+    """用户打开了的模块。"""
+    return modules.enabled()
 
 
 def display(name: str) -> str:
-    from .core.platform import Platform
-    mod = importlib.import_module(PLATFORMS[name].rsplit(".", 1)[0] + ".platform")
-    return next((v.display for v in vars(mod).values() if isinstance(v, Platform)), name)
+    return modules.display(name)
 
 
 def server_key() -> str:
-    """写进 AI 客户端配置的名字：只能用英文（Claude Code 的工具名要求 ^[a-zA-Z0-9_-]+$）。"""
-    names = available()
-    return "shopdata-" + names[0] if len(names) == 1 else "shopdata"
+    """写进 AI 客户端配置的名字：只能用英文（Claude Code 的工具名要求 ^[a-zA-Z0-9_-]+$）。
+    每个包都带着全部工具，名字固定，打开新模块不会变出第二个服务。"""
+    return "shopdata"
 
 
 def pick(platform: str) -> str:
@@ -74,7 +67,9 @@ def pick(platform: str) -> str:
             return names[0]
         raise ToolError(f"这个服务里有几个平台，请指定 platform：{'、'.join(names)}")
     if platform not in names:
-        raise ToolError(f"没有这个平台：{platform}。可用：{'、'.join(names)}")
+        if platform in modules.disabled():
+            raise ToolError(modules.not_enabled_hint(platform) + "先问用户要不要打开，同意后用 modules 工具打开。")
+        raise ToolError(f"没有这个平台：{platform}。已打开的：{'、'.join(names)}")
     return platform
 
 
@@ -184,6 +179,34 @@ def build() -> MCPServer:
             raise ToolError("带 --execute 的是修改店铺的操作，不能通过 AI 运行。请在终端里自己确认后运行。")
         code, out, err = await execute(tb_argv(p, command, *args))
         return deliver(" ".join(["tb", p, command, *args]), code, out, err, slug=f"{p}-{command}")
+
+    @mcp.tool(description="切换账号（账号存在用户浏览器的取数桥插件里）：action=list 列出存过的账号和现在登录的是谁；"
+                          "action=use 换成存过的某个账号（name 填 list 里的名字）；action=save 把浏览器里现在登录的账号存下来（name 是起的名字）；"
+                          "action=check 查存下的账号还在不在（不切换，不填 name 就全部查）。"
+                          "淘宝/天猫（含千牛、生意参谋、达摩盘、万相台）一组，1688 一组，1688 的把 is_1688 设为 true。"
+                          "用户说「用某某店 / 某某账号的数据」时，先 list 找到对应的名字，再 use，然后再取数。"
+                          "账号过期时不能替用户登录：请用户在浏览器里点插件图标重新登录。",
+              annotations=ToolAnnotations(read_only_hint=False, destructive_hint=False, idempotent_hint=True, open_world_hint=False))
+    async def account(action: str = "list", name: str = "", is_1688: bool = False) -> str:
+        if action not in ("list", "use", "save", "check"):
+            raise ToolError("action 只能是 list、use、save 或 check。")
+        if action == "use" and not name:
+            raise ToolError("换账号要给 name（先用 action=list 看有哪些名字）。")
+        argv = ["account", action] + ([name] if name else []) + (["--1688"] if is_1688 and action != "list" else [])
+        code, out, err = await execute(tb_argv(*argv), timeout=180)
+        return deliver("tb " + " ".join(argv), code, out, err, slug=f"account-{action}")
+
+    @mcp.tool(name="modules", description="工具模块：action=list 列出全部工具、哪些打开了；action=enable 打开 names 里的工具，没装的会自动下载（要先征得用户同意）。"
+                          "打开后要用户完全退出再重开 AI 助手才能用到新工具。",
+              annotations=ToolAnnotations(read_only_hint=False, destructive_hint=False, idempotent_hint=True, open_world_hint=False))
+    async def modules_tool(action: str = "list", names: list[str] | None = None) -> str:
+        if action not in ("list", "enable"):
+            raise ToolError("action 只能是 list 或 enable（关闭请用户自己在终端运行 tb modules disable）。")
+        argv = ["modules", action, *(names or [])]
+        if action == "enable" and not names:
+            raise ToolError("要打开哪些工具？names 填模块名，如 [\"alimama\"]。")
+        code, out, err = await execute(tb_argv(*argv), timeout=60)
+        return deliver("tb " + " ".join(argv), code, out, err, slug=f"modules-{action}")
 
     @mcp.tool(description="分析方法：做整份报告（日检、周复盘、单品诊断、测款、退货归因等）前先看。不带 topic 列出全部主题；"
                           "带 topic 给出这个主题的取数步骤、计算方法和报告格式。",

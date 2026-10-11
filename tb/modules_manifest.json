@@ -1,0 +1,53 @@
+{
+ "version": "1.5.0",
+ "modules": {
+  "sycm": {
+   "file": "module-sycm-1.5.0.zip",
+   "sha256": "2f34bcef9b76ad0548d8250d8619aa5c39f9949696c0d3f900c5ebb731059520",
+   "urls": [
+    "https://gitee.com/rakei076/sycm-cli/releases/download/v1.5.0/module-sycm-1.5.0.zip",
+    "https://github.com/rakei076/sycm-cli/releases/download/v1.5.0/module-sycm-1.5.0.zip"
+   ]
+  },
+  "dmp": {
+   "file": "module-dmp-1.5.0.zip",
+   "sha256": "bc0cda367b152115f44c1bff64da3a4e0aee236e2c6e610f4b225082c466501f",
+   "urls": [
+    "https://gitee.com/rakei076/dmp-cli/releases/download/v1.5.0/module-dmp-1.5.0.zip",
+    "https://github.com/rakei076/dmp-cli/releases/download/v1.5.0/module-dmp-1.5.0.zip"
+   ]
+  },
+  "qianniu": {
+   "file": "module-qianniu-1.5.0.zip",
+   "sha256": "0306401ba1f80eaeab3bc575812baf7772697eb53bc4db99d9b85745f3b4548a",
+   "urls": [
+    "https://gitee.com/rakei076/qianniu-cli/releases/download/v1.5.0/module-qianniu-1.5.0.zip",
+    "https://github.com/rakei076/qianniu-cli/releases/download/v1.5.0/module-qianniu-1.5.0.zip"
+   ]
+  },
+  "alimama": {
+   "file": "module-alimama-1.5.0.zip",
+   "sha256": "ad3ad57d20cc9fb37b8267db471dbd08d64878438036eace44756eafe26dff2a",
+   "urls": [
+    "https://gitee.com/rakei076/alimama-cli/releases/download/v1.5.0/module-alimama-1.5.0.zip",
+    "https://github.com/rakei076/alimama-cli/releases/download/v1.5.0/module-alimama-1.5.0.zip"
+   ]
+  },
+  "1688": {
+   "file": "module-1688-1.5.0.zip",
+   "sha256": "be2cebcc1c9d85126d146e101e52a95340855492338b07f2d04fd2cc0ec73221",
+   "urls": [
+    "https://gitee.com/rakei076/1688-cli/releases/download/v1.5.0/module-1688-1.5.0.zip",
+    "https://github.com/rakei076/1688-cli/releases/download/v1.5.0/module-1688-1.5.0.zip"
+   ]
+  },
+  "voc": {
+   "file": "module-voc-1.5.0.zip",
+   "sha256": "5f4554aa86b55e76a64a4441bf3008bf576aa0eb0d5c05f3cab222ab68e36ad7",
+   "urls": [
+    "https://gitee.com/rakei076/taobao-voc/releases/download/v1.5.0/module-voc-1.5.0.zip",
+    "https://github.com/rakei076/taobao-voc/releases/download/v1.5.0/module-voc-1.5.0.zip"
+   ]
+  }
+ }
+}

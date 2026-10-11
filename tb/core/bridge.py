@@ -58,6 +58,13 @@ def allowed_prefixes(plat: Platform) -> tuple[str, ...]:
     return tuple(base.rstrip("/") + "/" for base in plat.hosts.values())
 
 
+def _what(job: dict) -> str:
+    """调试日志里一个任务的简称。"""
+    if job.get("account"):
+        return "账号 " + str(job["account"].get("op"))
+    return str(job.get("url") or job.get("cookie"))[:80]
+
+
 def _dbg(plat: Platform, msg: str) -> None:
     import sys, time as _t
     if plat.env("DEBUG"):
@@ -229,7 +236,7 @@ class _Handler(BaseHTTPRequestHandler):
             except queue.Empty:
                 return self._send(204)
             self.server.taken[job["id"]] = job
-            _dbg(self.server.platform, f"插件取走任务 {(job.get('url') or job.get('cookie'))[:80]}")
+            _dbg(self.server.platform, f"插件取走任务 {_what(job)}")
             return self._send(200, json.dumps(job))
         self._send(404)
 
@@ -280,7 +287,7 @@ class BridgeServer(ThreadingHTTPServer):
             if getattr(last, "errno", None) in (errno.EPERM, errno.EACCES):
                 # 沙箱（如 Codex 默认权限）不让开本机端口：这不是端口被占，别让人去查谁占了端口
                 raise BridgeError("当前环境不允许在本机开端口，浏览器插件没法连进来。多半是命令在 AI 助手（如 Codex）的沙箱里运行。"
-                                  "请改用 MCP：在你自己打开的终端里运行一次 mcp install（例如 scripts/<工具>.sh mcp install，Windows 用 scripts\<工具>.cmd mcp install），完全退出并重开 Codex，之后让它通过 MCP 取数；也可以直接在你自己打开的终端里运行这条命令。"
+                                  "请改用 MCP：在你自己打开的终端里运行一次 mcp install（例如 scripts/<工具>.sh mcp install，Windows 用 scripts\\<工具>.cmd mcp install），完全退出并重开 Codex，之后让它通过 MCP 取数；也可以直接在你自己打开的终端里运行这条命令。"
                                   f"（{last}）")
             raise BridgeError(f"本机 {lo}–{hi} 端口都被占用了：{last}")
         self.port = self.server_address[1]
@@ -289,7 +296,7 @@ class BridgeServer(ThreadingHTTPServer):
     def requeue_taken(self) -> None:
         for job_id, job in list(self.taken.items()):
             if self.taken.pop(job_id, None) is not None and job_id in self.pending:
-                _dbg(self.platform, f"插件重连，重新派发 {(job.get('url') or job.get('cookie'))[:80]}")
+                _dbg(self.platform, f"插件重连，重新派发 {_what(job)}")
                 self.jobs.put(job)
 
     def start(self) -> None:
@@ -313,7 +320,7 @@ class BridgeServer(ThreadingHTTPServer):
         job_id = uuid.uuid4().hex
         waiter = {"event": threading.Event(), "result": None}
         self.pending[job_id] = waiter
-        _dbg(self.platform, f"派发任务 {(job.get('url') or job.get('cookie'))[:80]}")
+        _dbg(self.platform, f"派发任务 {_what(job)}")
         self.jobs.put({"id": job_id, "launch": self.platform.launch_url, **job})
         try:
             first = min(self.SLOW_NOTICE_AFTER, timeout)

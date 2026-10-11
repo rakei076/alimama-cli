@@ -584,7 +584,7 @@ def cmd_report(args: argparse.Namespace) -> None:
     name_candidates = {
         "campaign":        ["promotionName", "campaignName", "name"],
         "adgroup":         ["adgroupName", "promotionName", "name"],
-        "bidword":         ["originalWord", "word", "bidword", "name"],
+        "bidword":         ["originalWord", "bidwordPkgName", "word", "bidword", "name"],   # 智能选词包没有 originalWord，用包名
         "crowd":           ["crowdName", "targetCrowd", "promotionName", "name"],
         "item_promotion":  ["itemTitle", "promotionName", "name"],
         "creative":        ["creativeTitle", "creativeName", "promotionName", "name"],
@@ -593,16 +593,15 @@ def cmd_report(args: argparse.Namespace) -> None:
         "real_time":       ["dateStr", "date", "hour", "promotionName"],
         "other_promotion": ["promotionName", "name"],
     }
-    name_field = None
-    for cand in name_candidates.get(args.rpt_type, ["promotionName", "name"]):
-        if rows_sorted[0].get(cand):
-            name_field = cand
-            break
+    cands = name_candidates.get(args.rpt_type, ["promotionName", "name"])
 
     print(f"{'#':<4} {'名称':<28} {'展现':>9} {'花费':>9} {'成交':>10} {'ROI':>6} {'点击':>6} {'CTR':>6}")
     print("-" * 90)
     for i, r in enumerate(rows_sorted[:args.limit], 1):
-        name = str(r.get(name_field, '?'))[:26] if name_field else '?'
+        name = next((r[c] for c in cands if r.get(c)), None)   # 每行自己找：同一张表里不同行的名字字段可能不一样
+        if name is None and args.rpt_type == "bidword" and r.get("scene1Name"):
+            name = f"{r['scene1Name']}（无关键词）"   # 关键词报表里也会出现人群推广的花费，它本来就没有关键词
+        name = str(name or "?")[:26]
         adpv = int(r.get("adPv") or 0)
         charge = float(r.get("charge") or 0)
         amt = float(r.get("alipayInshopAmt") or 0)

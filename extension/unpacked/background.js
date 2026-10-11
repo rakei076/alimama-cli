@@ -104,7 +104,7 @@ function allowed(job) {
 // ---- 放行规则结束 ----
 
 const DEV_AUTO_RELOAD = false;   // build.py 只在开发版里改成 true
-const BUILD = "b2028f2e96e2";        // build.py 写入构建号
+const BUILD = "a3bb3670d10f";        // build.py 写入构建号
 const HEADERS = { "X-Dmp-Bridge": chrome.runtime.id };  // 身份头：服务端只认允许的插件 ID（同时让浏览器先发预检）
 // 每次连命令行都报上自己的版本（放在网址参数里，不加新的请求头，免得旧命令行的预检不认）
 const VERSION = chrome.runtime.getManifest().version;
@@ -116,20 +116,15 @@ const state = { connected: false, app: "", lastJob: 0, jobs: 0, lastError: "" };
 
 const log = (...a) => console.log("[taobao-cli]", ...a);
 
-// 用户可以在弹窗里关掉某些工具（例如买家号和卖家号分在两个 Chrome 资料里时，各自只服务自己那一边）
-async function disabledApps() {
-  try { return (await chrome.storage.local.get("off")).off || []; } catch (_) { return []; }
-}
+importScripts("accounts.js");   // 账号切换（handleAccount 等）
 
 async function findBridge() {
-  const off = await disabledApps();
   for (const p of PORTS) {
     try {
       const r = await fetch(`http://127.0.0.1:${p}/hello?v=${VERSION}`, { headers: HEADERS, signal: AbortSignal.timeout(800) });
       if (r.ok) {
         const hello = await r.json();
         if (/^[a-z]+-cli$/.test(hello.app || "")) {
-          if (off.includes(hello.app)) { log("端口", p, "是", hello.app, "，已在弹窗里关掉，不服务"); continue; }
           if (DEV_AUTO_RELOAD && hello.extension_build && hello.extension_build !== BUILD) { log("开发版：发现新构建，重载自己"); chrome.runtime.reload(); return null; }
           log("找到本机服务，端口", p, hello.app);
           state.app = hello.app;
@@ -325,6 +320,10 @@ function browserInfo() {
 }
 
 async function handle(job) {
+  if (job.account) {   // 账号切换：只回账号名和昵称，不回 cookie
+    try { return { id: job.id, account: await handleAccount(job.account) }; }
+    catch (e) { return { id: job.id, error: String(e.message || e) }; }
+  }
   if (!allowed(job)) return { id: job.id, error: "插件拒绝：只允许已登记平台的只读接口。" };
   try { return { id: job.id, browser: browserInfo(), ...(await runInPage(job)) }; }
   catch (e) { return { id: job.id, error: "插件执行失败：" + String(e) }; }
@@ -362,7 +361,7 @@ async function loop() {
       if (!r.ok) { base = null; break; }
       misses = 0;
       const job = await r.json();
-      log("收到任务", job.cookie ? "读 " + job.cookie : (job.method || "GET") + " " + new URL(job.url).pathname);
+      log("收到任务", job.account ? "账号 " + job.account.op : job.cookie ? "读 " + job.cookie : (job.method || "GET") + " " + new URL(job.url).pathname);
       state.lastJob = Date.now(); state.jobs += 1;
       const out = await handle(job);
       try { await fetch(`${base}/result`, { method: "POST", headers: { ...HEADERS, "Content-Type": "text/plain" }, body: JSON.stringify(out) }); }
@@ -378,6 +377,11 @@ chrome.alarms.onAlarm.addListener((a) => { if (a.name === "taobao-cli-poll") loo
 chrome.runtime.onMessage.addListener((msg, _s, reply) => {
   if (msg && msg.type === "tick") loop();
   if (msg && msg.type === "status") reply({ ...state, base });
+  if (msg && msg.type === "account") {   // 弹窗里的账号操作
+    const run = msg.op === "remove" ? accountRemove(msg.scope, msg.name) : handleAccount(msg);
+    run.then((r) => reply({ ok: r }), (e) => reply({ error: String(e.message || e) }));
+    return true;
+  }
 });
 chrome.runtime.onStartup.addListener(loop);
 chrome.runtime.onInstalled.addListener(loop);

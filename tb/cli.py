@@ -31,14 +31,22 @@ def main(argv: list[str] | None = None) -> int:
     _force_utf8()
     argv = list(sys.argv[1:] if argv is None else argv)
     if not argv or argv[0] in ("-h", "--help"):
-        print("用法：tb <平台> <命令...>    例：tb 1688 doctor\n可用平台：" + "、".join(PLATFORMS) + "\n列出平台：tb --list\n检查插件：tb plugin"
-              "\n给 AI 客户端用的 MCP 服务：tb mcp")
+        from .core import modules
+        print("用法：tb <平台> <命令...>    例：tb sycm doctor\n已打开的工具：" + "、".join(modules.enabled()) + "\n打开 / 关闭工具：tb modules\n检查插件：tb plugin"
+              "\n给 AI 客户端用的 MCP 服务：tb mcp\n切换账号：tb account")
         return 0
     if argv[0] == "--list":
-        print("\n".join(PLATFORMS))
+        from .core import modules
+        print("\n".join(modules.enabled()))
         return 0
+    if argv[0] == "modules":
+        from .core import modules
+        return modules.main(argv[1:])
     if argv[0] == "plugin":
         return _plugin()
+    if argv[0] == "account":
+        from .core import accounts
+        return accounts.main(argv[1:])
     # tb mcp：本地 MCP 服务。交付包的启动脚本固定跑 tb <平台> …，所以 tb <平台> mcp 也是它
     if argv[0] == "mcp" or (argv[0] in PLATFORMS and argv[1:2] == ["mcp"]):
         from . import mcp_server
@@ -46,6 +54,10 @@ def main(argv: list[str] | None = None) -> int:
     name, rest = argv[0], argv[1:]
     if name not in PLATFORMS:
         print(f"❌ 不认识的平台：{name}。可用：{'、'.join(PLATFORMS)}", file=sys.stderr)
+        return 1
+    from .core import modules
+    if name not in modules.enabled():
+        print(f"❌ {modules.not_enabled_hint(name)}", file=sys.stderr)
         return 1
     return importlib.import_module(PLATFORMS[name]).main(rest)
 

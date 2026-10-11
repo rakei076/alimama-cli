@@ -1,6 +1,6 @@
 # 取数桥插件
 
-「taobao-cli 取数桥」是一款 Chrome 插件，可让本工具借用你在 Chrome 中已登录的万相台读取数据。
+「taobao-cli 取数桥」是一款 Chrome 插件，可让本工具借用你在 Chrome 中已登录的各个店铺后台读取数据。
 
 - **Windows**：必须安装。Windows 版 Chrome 会加密登录状态，工具读不到，只能通过插件取数。
 - **Mac**：不用安装。工具直接读取 Chrome 中的登录状态；装了也没关系，工具会先直接读取，读不到时（例如刚重启过 Chrome）才改用插件。竞品评价例外，它在 Mac 上也要装插件。
@@ -9,21 +9,21 @@
 
 ## 检查是否已安装
 
-运行 `scripts/alimama.sh doctor`（Windows：`scripts\alimama.cmd doctor`）。看到 `checkAccess 通过` 即表示插件可用，无需再装。如果提示未安装、版本过旧或文件夹不存在，请按下面的步骤安装。
+运行 `scripts/sycm.sh doctor`（Windows：`scripts\sycm.cmd doctor`）。看到 `probe = ok` 即表示插件可用，无需再装。如果提示未安装、版本过旧或文件夹不存在，请按下面的步骤安装。
 
 ## 安装插件
 
-安装约需 2 分钟，只需进行一次。开始前，请先解压 zip，找到 `alimama-cli\extension\unpacked` 文件夹（里面有 `manifest.json`）。
+安装约需 2 分钟，只需进行一次。开始前，请先解压 zip，找到 `shopdata\extension\unpacked` 文件夹（里面有 `manifest.json`）。
 
 1. **打开扩展程序页**：在 Chrome 地址栏输入 `chrome://extensions`，按回车。
 2. **开启开发者模式**：打开页面右上角的「开发者模式」开关。页面左上角会出现三个按钮。
 3. **移除旧插件**：如果页面上有「dmp-cli 达摩盘取数桥」「taobao-voc 取数桥」或旧版「taobao-cli 取数桥」，逐个点击「移除」。
 4. **加载插件**：点击最左边的「加载已解压的扩展程序」。
    **注意**：请勿点击中间的「打包扩展程序」，该按钮供开发者使用，无法完成安装。
-5. **选择文件夹**：在弹出的窗口中依次进入 `alimama-cli` → `extension`，选中 `unpacked`，点击「选择文件夹」。
+5. **选择文件夹**：在弹出的窗口中依次进入 `shopdata` → `extension`，选中 `unpacked`，点击「选择文件夹」。
 6. **核对插件**：页面上出现「taobao-cli 取数桥」卡片。请确认 ID 为 `gifdenhgccikkfbodclkdbohicghfhco`，右下角开关为蓝色（已开启）。
-7. **登录后台**：在同一个 Chrome 中登录 https://one.alimama.com。
-8. **验证安装**：再次运行 `scripts/alimama.sh doctor`。看到 `checkAccess 通过` 即表示安装完成。
+7. **登录后台**：在同一个 Chrome 中登录 要取数的后台（如 https://sycm.taobao.com、https://dmp.taobao.com）。
+8. **验证安装**：再次运行 `scripts/sycm.sh doctor`。看到 `probe = ok` 即表示安装完成。
 
 **重要**：插件从哪个文件夹加载，就不要删除或移动那个文件夹，否则插件会失效。
 
@@ -37,8 +37,8 @@
 | 点击「打包扩展程序」后，弹出「私有密钥已存在」「必须存在输入目录」 | 点击「取消」，回到第 4 步，点击最左边的按钮 |
 | 卡片开关为灰色 | 点击开关将其打开 |
 | 提示插件「太旧」或「文件夹不见了」 | 在 `chrome://extensions` 中移除旧的取数桥，重新加载本工具自带的 `extension/unpacked` |
-| 一直等到超时，但 ID 正确、开关已打开 | ① Chrome 必须处于打开状态；② 插件每 30 秒唤醒一次，命令会等待 40～60 秒，请再试一次；③ 点击插件图标，确认「万相台」处于勾选状态；④ 如果命令是在 AI 助手中运行的，请改在你自己打开的终端中运行一次，AI 助手的沙箱可能拦截了本机端口 |
-| 提示「这个浏览器里还没有登录这个平台」 | 在这个 Chrome 中打开 https://one.alimama.com，登录一次 |
+| 一直等到超时，但 ID 正确、开关已打开 | ① Chrome 必须处于打开状态；② 插件每 30 秒唤醒一次，命令会等待 40～60 秒，请再试一次；③ 如果命令是在 AI 助手中运行的，请改在你自己打开的终端中运行一次，AI 助手的沙箱可能拦截了本机端口 |
+| 提示「这个浏览器里还没有登录这个平台」 | 在这个 Chrome 中打开 要取数的后台（如 https://sycm.taobao.com、https://dmp.taobao.com），登录一次 |
 
 ## 安全说明
 

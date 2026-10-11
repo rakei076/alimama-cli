@@ -1,6 +1,6 @@
 @echo off
 setlocal EnableExtensions EnableDelayedExpansion
-rem alimama-cli launcher for Windows. Usage: scripts\alimama.cmd <command> [args...]
+rem taobao-cli launcher for Windows. Usage: scripts\alimama.cmd <command> [args...]
 rem NOTE: keep this file ASCII-only with CRLF line endings. cmd.exe reads it as GBK on Chinese Windows.
 for %%I in ("%~dp0..") do set "SKILL_DIR=%%~fI"
 rem uv installs its Python under the user profile (default), NOT inside this folder: moving the folder must not break it
