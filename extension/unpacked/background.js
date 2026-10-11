@@ -104,7 +104,7 @@ function allowed(job) {
 // ---- 放行规则结束 ----
 
 const DEV_AUTO_RELOAD = false;   // build.py 只在开发版里改成 true
-const BUILD = "a3bb3670d10f";        // build.py 写入构建号
+const BUILD = "33c0afc395e5";        // build.py 写入构建号
 const HEADERS = { "X-Dmp-Bridge": chrome.runtime.id };  // 身份头：服务端只认允许的插件 ID（同时让浏览器先发预检）
 // 每次连命令行都报上自己的版本（放在网址参数里，不加新的请求头，免得旧命令行的预检不认）
 const VERSION = chrome.runtime.getManifest().version;
@@ -125,7 +125,15 @@ async function findBridge() {
       if (r.ok) {
         const hello = await r.json();
         if (/^[a-z]+-cli$/.test(hello.app || "")) {
-          if (DEV_AUTO_RELOAD && hello.extension_build && hello.extension_build !== BUILD) { log("开发版：发现新构建，重载自己"); chrome.runtime.reload(); return null; }
+          if (DEV_AUTO_RELOAD && hello.extension_build && hello.extension_build !== BUILD) {
+            // 同一个新构建只重载一次：插件文件夹没换成新文件时，重载完还是旧的，反复重载会被 Chrome 停用
+            const { triedBuild } = await chrome.storage.local.get("triedBuild");
+            if (triedBuild !== hello.extension_build) {
+              await chrome.storage.local.set({ triedBuild: hello.extension_build });
+              log("开发版：发现新构建，重载自己"); chrome.runtime.reload(); return null;
+            }
+            log("开发版：重载过一次还是旧构建，插件文件夹没更新，不再重载");
+          }
           log("找到本机服务，端口", p, hello.app);
           state.app = hello.app;
           return `http://127.0.0.1:${p}`;

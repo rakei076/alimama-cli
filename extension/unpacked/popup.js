@@ -35,7 +35,7 @@ let checking = false;   // 打开弹窗时自动检查一遍账号还在不在�
 function dot(a) {
   const d = document.createElement("span");
   d.className = "st " + (checking ? "" : a.alive === false ? "off" : a.alive ? "on" : "");
-  d.title = checking ? "正在检查" : a.alive === false ? "已掉线：切过去后重新登录" : a.alive ? "在线" : "还没检查";
+  d.title = checking ? "正在检查" : a.alive === false ? `${a.how || "已掉线"}：点「重新登录」` : a.alive ? "在线" : a.how || "还没检查";
   return d;
 }
 
@@ -66,6 +66,12 @@ async function renderAccounts() {
       n.textContent = a.name;
       n.title = a.nick;
       row.append(n);
+      if (a.alive === false && !checking && a.how && a.how !== "已掉线") {   // 只有一部分后台掉线（比如千牛在、生意参谋要重登）：写出来
+        const w = document.createElement("small");
+        w.className = "bad";
+        w.textContent = a.how.split("（")[0];
+        row.append(w);
+      }
       if (a.alive === false && !checking) row.append(button("重新登录", async () => {
         // 掉线的账号：把现在的登录先存好、从浏览器里收起来，再打开登录页；登录的还是这个号，插件会自动把它的存档换成新的登录
         const r = await askBg({ op: "fresh", scope });

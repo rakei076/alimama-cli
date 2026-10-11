@@ -4,8 +4,9 @@
 
 const SCOPES = {
   taobao: { label: "淘宝/天猫", domains: ["taobao.com", "tmall.com", "tmall.hk", "alimama.com"], login: "https://login.taobao.com/",
-            check: "https://myseller.taobao.com/home.htm" },   // 检查页：掉线时服务器直接转去登录页（10/11 用在线、掉线、空登录三种校准过）
-  "1688": { label: "1688", domains: ["1688.com"], login: "https://login.1688.com/", check: "https://cart.1688.com/cart.htm" },
+            // 检查页：掉线时服务器直接转去登录页（10/11 校准过）。生意参谋的登录单独过期，千牛在线时它也可能要重登，所以两个都查
+            checks: [["千牛", "https://myseller.taobao.com/home.htm"], ["生意参谋", "https://sycm.taobao.com/portal/home.htm"]] },
+  "1688": { label: "1688", domains: ["1688.com"], login: "https://login.1688.com/", checks: [["1688", "https://cart.1688.com/cart.htm"]] },
 };
 
 // 判断「是谁」用的 cookie：账号编号、昵称（子账号是「主账号:子账号」）
@@ -103,7 +104,7 @@ function summary(scope, name, a, active) {
   const expired = !a.cookies.some((c) => ID_COOKIES[scope].includes(c.name)
     && (c.session || !c.expirationDate || c.expirationDate * 1000 > Date.now()));
   return { scope, name, nick: a.nick, uid: a.uid, savedAt: a.savedAt, active: name === active, expired,
-           alive: a.alive, checkedAt: a.checkedAt };
+           alive: a.alive, how: a.how, checkedAt: a.checkedAt };
 }
 
 async function accountList() {
@@ -208,12 +209,15 @@ function cookieHeader(cookies, url) {
 
 const CHECK_LOGIN = /(^|\.)(login\w*|passport|havanalogin)\./;   // loginmyseller.taobao.com 这类卖家登录页也算   // 最后停在这些站点 = 被转去登录了
 
+const CHECK_LOGIN_PATH = /^\/custom\/login\.htm/;   // 生意参谋掉线转去的是自己域名下的 sycm.taobao.com/custom/login.htm
+
 let checkRule = 9000;
-async function probe(scope, cookies) {
-  const url = `${SCOPES[scope].check}?tbcli_check=${Date.now()}${Math.random().toString(36).slice(2, 8)}`;
+async function probePage(scope, cookies, page) {
+  const url = `${page}?tbcli_check=${Date.now()}${Math.random().toString(36).slice(2, 8)}`;
   const id = ++checkRule;
   // 这一两秒里，插件后台自己发往这一组域名的请求都换成这个账号的 Cookie（跟着跳转的每一步都带上），平台回的 Set-Cookie 全部拦掉
-  await chrome.declarativeNetRequest.updateSessionRules({ addRules: [{
+  // 会话规则在插件后台重启后还在，而编号从头数：先删同号的旧规则再加
+  await chrome.declarativeNetRequest.updateSessionRules({ removeRuleIds: [id], addRules: [{
     id, priority: 1,
     condition: { requestDomains: SCOPES[scope].domains, tabIds: [chrome.tabs.TAB_ID_NONE], initiatorDomains: [chrome.runtime.id] },
     action: { type: "modifyHeaders",
@@ -222,15 +226,26 @@ async function probe(scope, cookies) {
   }] });
   try {
     const r = await fetch(url, { credentials: "omit", cache: "no-store" });
-    const host = new URL(r.url).hostname;
-    if (CHECK_LOGIN.test(host)) return { alive: false, how: "转去了登录页" };
-    if (!r.ok) return { alive: null, how: `后台返回 ${r.status}` };
-    return { alive: true, how: "后台正常打开" };
-  } catch (e) {
-    return { alive: null, how: "网络出错：" + String(e.message || e) };
+    const u = new URL(r.url);
+    if (CHECK_LOGIN.test(u.hostname) || CHECK_LOGIN_PATH.test(u.pathname)) return false;
+    return r.ok ? true : null;
+  } catch (_) {
+    return null;
   } finally {
     await chrome.declarativeNetRequest.updateSessionRules({ removeRuleIds: [id] });
   }
+}
+
+// 每个检查页都打开一次：全部正常才算在线；哪个被转去登录页就说哪个要重新登录
+async function probe(scope, cookies) {
+  const res = [];
+  for (const [name, page] of SCOPES[scope].checks) res.push([name, await probePage(scope, cookies, page)]);
+  const dead = res.filter(([, ok]) => ok === false).map(([n]) => n);
+  const unknown = res.filter(([, ok]) => ok === null).map(([n]) => n);
+  if (dead.length === res.length) return { alive: false, how: "已掉线" };
+  if (dead.length) return { alive: false, how: `${dead.join("、")}要重新登录（${res.filter(([, ok]) => ok).map(([n]) => n).join("、")}还在）` };
+  if (unknown.length) return { alive: null, how: `${unknown.join("、")}打不开，查不出` };
+  return { alive: true, how: res.length > 1 ? `${res.map(([n]) => n).join("、")}都正常` : "后台正常打开" };
 }
 
 async function accountCheck(scope, name) {
@@ -240,7 +255,7 @@ async function accountCheck(scope, name) {
     for (const [n, a] of Object.entries(v.accounts[s])) {
       if (name && n !== name) continue;
       const r = await probe(s, a.cookies);
-      a.checkedAt = Date.now(); a.alive = r.alive;
+      a.checkedAt = Date.now(); a.alive = r.alive; a.how = r.how;
       out.push({ scope: s, name: n, nick: a.nick, ...r });
     }
   }
