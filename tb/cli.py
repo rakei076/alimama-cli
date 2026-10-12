@@ -1,3 +1,4 @@
+# 店铺数据工具 · 作者 Rakel · https://rakel.top · MIT 协议
 """tb 总入口：tb <平台> <命令...>。各平台的命令由它自己的 cli 模块定义。"""
 from __future__ import annotations
 

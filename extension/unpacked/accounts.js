@@ -225,7 +225,7 @@ async function probePage(scope, cookies, page) {
               responseHeaders: [{ header: "set-cookie", operation: "remove" }] },
   }] });
   try {
-    const r = await fetch(url, { credentials: "omit", cache: "no-store" });
+    const r = await fetch(url, { credentials: "omit", cache: "no-store", signal: AbortSignal.timeout(10000) });   // 页面一直不返回（比如排队页）就算查不出，别把整个检查挂住
     const u = new URL(r.url);
     if (CHECK_LOGIN.test(u.hostname) || CHECK_LOGIN_PATH.test(u.pathname)) return false;
     return r.ok ? true : null;

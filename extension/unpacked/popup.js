@@ -128,7 +128,12 @@ async function renderAccounts() {
   }
 }
 
+const FRESH = 10 * 60 * 1000;   // 10 分钟内查过就直接显示上次的结果，不再重查（每个淘宝号要开两个后台页面，查一遍要好几秒）
+
 async function openPopup() {
+  const res = await askBg({ op: "list" });
+  const all = res && res.ok ? Object.values(res.ok.scopes).flat() : [];
+  if (all.length && all.every((a) => a.checkedAt && Date.now() - a.checkedAt < FRESH)) { renderAccounts(); return; }
   checking = true;
   await renderAccounts();
   const r = await askBg({ op: "check" });

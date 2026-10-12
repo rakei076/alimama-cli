@@ -1,3 +1,4 @@
+# 店铺数据工具 · 作者 Rakel · https://rakel.top · MIT 协议
 """浏览器插件桥。
 
 为什么要有它：Windows 上的 Chrome 把 cookie 加密了，别的程序读不到；所以 Windows 上只能走插件。

@@ -1,3 +1,4 @@
+# 店铺数据工具 · 作者 Rakel · https://rakel.top · MIT 协议
 """tb mcp：把这个包里的平台做成一个本地 MCP 服务（stdio），交给 AI 客户端（Claude Code、Codex、Cursor……）用。
 
 薄壳：每次调用工具都在子进程里跑现成的命令行（python -m tb <平台> <命令> …），把输出交回去。
