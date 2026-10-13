@@ -104,7 +104,7 @@ function allowed(job) {
 // ---- 放行规则结束 ----
 
 const DEV_AUTO_RELOAD = false;   // build.py 只在开发版里改成 true
-const BUILD = "726056e596ac";        // build.py 写入构建号
+const BUILD = "2e3d9a57ca7d";        // build.py 写入构建号
 const HEADERS = { "X-Dmp-Bridge": chrome.runtime.id };  // 身份头：服务端只认允许的插件 ID（同时让浏览器先发预检）
 // 每次连命令行都报上自己的版本（放在网址参数里，不加新的请求头，免得旧命令行的预检不认）
 const VERSION = chrome.runtime.getManifest().version;

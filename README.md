@@ -101,11 +101,11 @@ alimama-cli 是一款读取万相台（阿里妈妈）广告数据的工具，�
 
 ## 其他工具
 
-这个包只带了万相台。同一套工具还有生意参谋、达摩盘、千牛、1688、竞品评价，要用的时候打开就行，会自动下载装上：
+这个包只带了万相台。同一套工具还有生意参谋，要用的时候打开就行，会自动下载装上：
 
 - 看全部工具：`scripts/tb.sh modules`（Windows：`scripts\tb.cmd modules`）
-- 装上并打开万相台：`scripts/tb.sh modules enable alimama`，然后完全退出 AI 助手再打开
-- 也可以直接跟 AI 助手说「打开万相台」，它会先问你，再帮你装上
+- 装上并打开生意参谋：`scripts/tb.sh modules enable sycm`，然后完全退出 AI 助手再打开
+- 也可以直接跟 AI 助手说「打开生意参谋」，它会先问你，再帮你装上
 - 下载不了（没网、公司网络拦了）：按提示在浏览器里下载模块包，再运行 `scripts/tb.sh modules install <模块> <文件>`
 
 ## 协议

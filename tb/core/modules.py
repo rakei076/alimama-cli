@@ -59,10 +59,24 @@ def enabled() -> list[str]:
     return [n for n in have if chosen is None or n in chosen]
 
 
+def downloadable() -> list[str]:
+    """下载清单里有的模块（能现场下载）。只公开了部分工具，清单里只写公开的那几个。"""
+    try:
+        return [n for n in PLATFORMS if n in json.loads(MANIFEST_FILE.read_text(encoding="utf-8")).get("modules", {})]
+    except (OSError, ValueError):
+        return []
+
+
+def offered() -> list[str]:
+    """这个包里能用的模块：装了的，加上能下载的。"""
+    have, dl = installed(), downloadable()
+    return [n for n in PLATFORMS if n in have or n in dl]
+
+
 def disabled() -> list[str]:
-    """用户还用不了的模块：没装的，和装了但关掉的。"""
+    """能用但还没打开的模块：没装但能下载的，和装了但关掉的。"""
     on = enabled()
-    return [n for n in PLATFORMS if n not in on]
+    return [n for n in offered() if n not in on]
 
 
 def display(name: str) -> str:
@@ -76,9 +90,10 @@ def _save(names: list[str]) -> None:
 
 
 def _check(names: list[str]) -> list[str]:
-    bad = [n for n in names if n not in PLATFORMS]
+    ok = offered()
+    bad = [n for n in names if n not in ok]
     if bad:
-        raise ValueError(f"没有这个模块：{'、'.join(bad)}。可用：{'、'.join(PLATFORMS)}")
+        raise ValueError(f"这个包里没有：{'、'.join(bad)}，也不能下载。可用：{'、'.join(ok)}")
     return names
 
 
@@ -216,11 +231,11 @@ def main(argv: list[str]) -> int:
     except (ValueError, DownloadFailed, OSError) as e:
         print(f"❌ {e}", file=sys.stderr)
         return 1
-    on, have = enabled(), installed()
+    on, have, ok = enabled(), installed(), offered()
     print("全部工具（打开的才能用；没装的打开时会自动下载）：")
-    for n in PLATFORMS:
+    for n in ok:
         state = "✅ 已打开" if n in on else ("⏸ 已关掉" if n in have else "⬇ 没装  ")
         print(f"  {state}  {n:<8} {ABOUT.get(n, '')}")
-    if len(on) < len(PLATFORMS):
-        print("打开：" + cmd(f"modules enable {next(n for n in PLATFORMS if n not in on)}"))
+    if len(on) < len(ok):
+        print("打开：" + cmd(f"modules enable {next(n for n in ok if n not in on)}"))
     return 0
