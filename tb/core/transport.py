@@ -15,7 +15,7 @@ import sys
 import time
 from pathlib import Path
 
-from . import bridge, extension
+from . import bridge, extension, runlog
 from .auth import NotLoggedIn
 from .client import Client, TbError
 from .platform import Platform
@@ -29,19 +29,16 @@ def mode(plat: Platform) -> str:
 
 
 def _cookie_client(plat: Platform) -> Client:
-    return Client(plat)
+    client = Client(plat)
+    runlog.event("connect", platform=plat.name, mode="cookies")
+    return client
 
 
 def _seen_marker() -> Path:
     """「连上过插件」的标记。一个插件服务所有平台，所以标记也只有一个：Mac 上直接读不到登录时，任何一个平台连上过插件，就改走插件。
     位置：TB_STATE_ROOT/bridge-seen，默认 ~/.taobao-cli/（Windows：%LOCALAPPDATA%\\taobao-cli\\）。"""
-    root = os.environ.get("TB_STATE_ROOT")
-    if root:
-        return Path(root).expanduser() / "bridge-seen"
-    if os.name == "nt":
-        base = os.environ.get("LOCALAPPDATA") or os.environ.get("APPDATA") or str(Path.home() / "AppData" / "Local")
-        return Path(base) / "taobao-cli" / "bridge-seen"
-    return Path.home() / ".taobao-cli" / "bridge-seen"
+    from .paths import state_root
+    return state_root() / "bridge-seen"
 
 
 def _wait_for_extension(server, seconds: float) -> bool:
@@ -105,9 +102,33 @@ def _no_connection_hint(plat: Platform, found: list) -> str:
             "  3. 杀毒或安全软件拦了本机 127.0.0.1 也会这样，把它加入信任。")
 
 
+def wanted_account() -> str:
+    """tb --account <名字> 指定的账号（总入口放进环境变量 TB_ACCOUNT，MCP 的 run 也这样传）。"""
+    return (os.environ.get("TB_ACCOUNT") or "").strip()
+
+
+def _use_account(server, client: Client, name: str) -> None:
+    """拿到排队锁之后、取数之前先换号：换号和取数在同一条命令里，别的命令插不进来。"""
+    res = server.submit({"account": {"op": "use", "scope": "taobao", "name": name}}, 60)
+    if res.get("error"):
+        raise TbError(f"换不成账号「{name}」：{res['error']}", stage="切换账号",
+                      hint="运行 tb account list 看存过哪些账号（名字要一模一样）；账号掉线了就在插件里切过去重新登录一次。")
+    acc = res["account"]
+    client.session.account = {"uid": acc.get("uid") or "", "nick": acc.get("nick") or ""}
+    client.session.instance = res.get("instance") or ""   # 换号的是哪个插件，取数也必须是它
+    runlog.event("account", name=acc.get("name"), nick=acc.get("nick"), uid=acc.get("uid"), already=bool(acc.get("already")))
+    print(f"已换成账号「{acc.get('name')}」（{acc.get('nick')}），接着取数。", file=sys.stderr)
+
+
 def make_client(plat: Platform) -> Client:
     m = "extension" if plat.extension_only else mode(plat)
     windows = os.name == "nt"
+    account = wanted_account()
+    if account:
+        if m == "cookies":
+            raise TbError("指定账号（--account）要通过浏览器插件切换，不能和直接读 cookie 的方式一起用。", stage="切换账号",
+                          hint=f"去掉 {plat.env_prefix}_MODE=cookies 再运行。")
+        m = "extension"
     if m == "cookies":
         if windows:
             raise TbError("Windows 上读不到 Chrome 的登录信息，只能通过浏览器插件取数。", stage="连接插件", hint=_install_hint(plat))
@@ -143,15 +164,13 @@ def make_client(plat: Platform) -> Client:
     except OSError:
         pass
     print(f"已连上浏览器插件，通过你的浏览器取数（用的是浏览器里已登录的{plat.display}）。", file=sys.stderr)
+    runlog.event("connect", platform=plat.name, mode="extension", extension=got, port=server.port)
     client = Client(plat, cookies={}, session=bridge.BridgeSession(server))
     client._bridge_server = server  # 进程结束时随之关闭
+    if account:
+        try:
+            _use_account(server, client, account)
+        except BaseException:
+            server.stop()
+            raise
     return client
-
-
-def release(client: Client) -> None:
-    """用完一个经插件取数的客户端就关掉它的本机服务。插件一次只服务一个本机服务，
-    同一个命令里要换另一个平台取数（如 tb 1688 doctor 先查订单再查生意参谋）时，必须先关掉前一个。"""
-    server = getattr(client, "_bridge_server", None)
-    if server is not None:
-        server.stop()
-        client._bridge_server = None

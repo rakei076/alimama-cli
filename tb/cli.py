@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib
+import os
 import sys
 
 from .platforms import PLATFORMS
@@ -28,18 +29,73 @@ def _plugin() -> int:
     return 0 if ok else 1
 
 
+GLOBAL_OPTIONS = {"--account": "TB_ACCOUNT", "--shop": "TB_SHOP"}
+
+
+def _take_globals(argv: list[str]) -> list[str]:
+    """放在平台前面的总选项，放进环境变量交给取数那一层：
+    tb --account <名字> <平台> <命令…>   先换成这个账号再取数（TB_ACCOUNT）
+    tb --shop <店铺编号> <平台> <命令…>  这个登录能看几家店时，只要这一家的数据（TB_SHOP）"""
+    while argv:
+        name, _, value = argv[0].partition("=")
+        if name not in GLOBAL_OPTIONS:
+            break
+        if not value:
+            if len(argv) < 2:
+                break
+            value, argv = argv[1], argv[2:]
+        else:
+            argv = argv[1:]
+        os.environ[GLOBAL_OPTIONS[name]] = value
+    return argv
+
+
 def main(argv: list[str] | None = None) -> int:
     _force_utf8()
-    argv = list(sys.argv[1:] if argv is None else argv)
+    argv = _take_globals(list(sys.argv[1:] if argv is None else argv))
     if not argv or argv[0] in ("-h", "--help"):
         from .core import modules
-        print("用法：tb <平台> <命令...>    例：tb sycm doctor\n已打开的工具：" + "、".join(modules.enabled()) + "\n打开 / 关闭工具：tb modules\n检查插件：tb plugin"
-              "\n给 AI 客户端用的 MCP 服务：tb mcp\n切换账号：tb account")
+        print("用法：tb <平台> <命令...>    例：tb sycm doctor\n已打开的工具：" + "、".join(modules.enabled())
+              + "\n打开 / 关闭工具：tb modules\n检查插件：tb plugin"
+              "\n给 AI 客户端用的 MCP 服务：tb mcp\n切换账号：tb account（取某个账号的数据：tb --account <账号名> <平台> <命令>）"
+              "\n一个登录能看几家店时只要其中一家：tb --shop <店铺编号> <平台> <命令>"
+              "\n运行日志：tb log（出了问题运行 tb log export，把生成的 zip 发给开发者）"
+              "\n分析方法：tb guide（本公司自己的月报、周报等要求放在 tb guide --where 给出的文件夹，优先照它）")
         return 0
     if argv[0] == "--list":
         from .core import modules
         print("\n".join(modules.enabled()))
         return 0
+    if argv[0] == "log":
+        from .core import runlog
+        return runlog.main(argv[1:])
+    if argv[0] == "guide":
+        from .core import guides
+        return guides.main(argv[1:])
+    # tb mcp：本地 MCP 服务。交付包的启动脚本固定跑 tb <平台> …，所以 tb <平台> mcp 也是它
+    if argv[0] == "mcp" or (argv[0] in PLATFORMS and argv[1:2] == ["mcp"]):
+        from . import mcp_server
+        return mcp_server.main(argv[argv.index("mcp") + 1:])
+    from .core import runlog
+    runlog.begin(argv)
+    code = 1
+    try:
+        code = _dispatch(argv)
+        return code
+    except SystemExit as e:   # argparse、平台命令行用 sys.exit 退出
+        code = e.code if isinstance(e.code, int) else (0 if e.code is None else 1)
+        raise
+    except KeyboardInterrupt:
+        code = 130
+        raise
+    except BaseException as e:
+        runlog.failure(e)
+        raise
+    finally:
+        runlog.finish(code)
+
+
+def _dispatch(argv: list[str]) -> int:
     if argv[0] == "modules":
         from .core import modules
         return modules.main(argv[1:])
@@ -48,10 +104,6 @@ def main(argv: list[str] | None = None) -> int:
     if argv[0] == "account":
         from .core import accounts
         return accounts.main(argv[1:])
-    # tb mcp：本地 MCP 服务。交付包的启动脚本固定跑 tb <平台> …，所以 tb <平台> mcp 也是它
-    if argv[0] == "mcp" or (argv[0] in PLATFORMS and argv[1:2] == ["mcp"]):
-        from . import mcp_server
-        return mcp_server.main(argv[argv.index("mcp") + 1:])
     name, rest = argv[0], argv[1:]
     if name not in PLATFORMS:
         print(f"❌ 不认识的平台：{name}。可用：{'、'.join(PLATFORMS)}", file=sys.stderr)
@@ -60,8 +112,8 @@ def main(argv: list[str] | None = None) -> int:
     if name not in modules.enabled():
         print(f"❌ {modules.not_enabled_hint(name)}", file=sys.stderr)
         return 1
-    return importlib.import_module(PLATFORMS[name]).main(rest)
-
+    result = importlib.import_module(PLATFORMS[name]).main(rest)
+    return 0 if result is None else result
 
 if __name__ == "__main__":
     sys.exit(main())

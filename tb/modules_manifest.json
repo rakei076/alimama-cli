@@ -1,20 +1,20 @@
 {
- "version": "1.5.0",
+ "version": "1.6.0-beta.1",
  "modules": {
   "sycm": {
-   "file": "module-sycm-1.5.0.zip",
-   "sha256": "2f34bcef9b76ad0548d8250d8619aa5c39f9949696c0d3f900c5ebb731059520",
+   "file": "module-sycm-1.6.0-beta.1.zip",
+   "sha256": "ed02fb193d58bcc41e0be123de37408657269c3207ad55435f930479799fc37e",
    "urls": [
-    "https://gitee.com/rakel076/sycm-cli/releases/download/v1.5.0/module-sycm-1.5.0.zip",
-    "https://github.com/rakei076/sycm-cli/releases/download/v1.5.0/module-sycm-1.5.0.zip"
+    "https://gitee.com/rakel076/sycm-cli/releases/download/v1.6.0-beta.1/module-sycm-1.6.0-beta.1.zip",
+    "https://github.com/rakei076/sycm-cli/releases/download/v1.6.0-beta.1/module-sycm-1.6.0-beta.1.zip"
    ]
   },
   "alimama": {
-   "file": "module-alimama-1.5.0.zip",
+   "file": "module-alimama-1.6.0-beta.1.zip",
    "sha256": "ad3ad57d20cc9fb37b8267db471dbd08d64878438036eace44756eafe26dff2a",
    "urls": [
-    "https://gitee.com/rakel076/alimama-cli/releases/download/v1.5.0/module-alimama-1.5.0.zip",
-    "https://github.com/rakei076/alimama-cli/releases/download/v1.5.0/module-alimama-1.5.0.zip"
+    "https://gitee.com/rakel076/alimama-cli/releases/download/v1.6.0-beta.1/module-alimama-1.6.0-beta.1.zip",
+    "https://github.com/rakei076/alimama-cli/releases/download/v1.6.0-beta.1/module-alimama-1.6.0-beta.1.zip"
    ]
   }
  }

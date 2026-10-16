@@ -21,7 +21,7 @@ import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from types import SimpleNamespace
 
-from .errors import LoginExpired, Redirected
+from .errors import AccountChanged, LoginExpired, PluginChanged, Redirected
 from urllib.parse import parse_qs, urlencode, urlsplit
 
 from .platform import Platform
@@ -33,7 +33,8 @@ DEV_EXTENSION_ID = "gifdenhgccikkfbodclkdbohicghfhco"
 STORE_EXTENSION_ID = "ecahndljpkaakkjofejgcjnikikcemni"
 EXTENSION_IDS = frozenset({DEV_EXTENSION_ID, STORE_EXTENSION_ID})
 # 命令行要求的最低插件版本。插件从 0.4.0 起每次连命令行都报自己的版本（/hello、/next 的 v 参数）；不报的就是更旧的。
-MIN_EXTENSION_VERSION = "0.4.0"
+# 0.8.0 起每次交结果都报当时登录的账号（防串号要靠它）。
+MIN_EXTENSION_VERSION = "0.8.0"
 
 
 def min_version(plat: Platform) -> str:
@@ -72,6 +73,10 @@ def _dbg(plat: Platform, msg: str) -> None:
         print(f"[bridge {_t.strftime('%H:%M:%S')}] {msg}", file=sys.stderr, flush=True)
 
 
+SWITCH_HINT = ("有别的命令或有人在插件里切换了账号。同一时间只跑一个账号的取数；要取某个账号的数据，"
+               "用 tb --account <名字> <平台> <命令>（MCP 的 run 填 account），换号和取数一步做完，中间不会被插队。")
+
+
 class BridgeError(RuntimeError):
     no_retry = True  # 插件超时/被拒，重试只会把等待翻倍；直接报错
 
@@ -102,16 +107,12 @@ def _dev_build() -> str | None:
         return None
 
 
-def _lock_path():
-    import os
-    from pathlib import Path
-    root = os.environ.get("TB_STATE_ROOT")
-    if root:
-        return Path(root).expanduser() / "bridge.lock"
-    if os.name == "nt":
-        base = os.environ.get("LOCALAPPDATA") or os.environ.get("APPDATA") or str(Path.home() / "AppData" / "Local")
-        return Path(base) / "taobao-cli" / "bridge.lock"
-    return Path.home() / ".taobao-cli" / "bridge.lock"
+def _lock_path(plat: Platform | None = None):
+    """排队锁：整台电脑一把（插件只有一个，装了几份工具也要排同一个队）。
+    测试给平台指定了专属端口（<PREFIX>_BRIDGE_PORT）时，不和日常命令抢插件，锁也按端口分开、放在自己的状态目录。"""
+    from .paths import machine_root, state_root
+    port = plat.env("BRIDGE_PORT") if plat is not None else None
+    return state_root() / f"bridge-{port}.lock" if port else machine_root() / "bridge.lock"
 
 
 class BridgeLock:
@@ -221,6 +222,7 @@ class _Handler(BaseHTTPRequestHandler):
         version = parse_qs(url.query).get("v", [""])[0]
         if version:   # 插件报的自己的版本
             self.server.extension_version = version
+        self.server.saw_instance(parse_qs(url.query).get("i", [""])[0])   # 插件 0.8.0 起报自己的实例编号
         if url.path == "/hello":
             self.server.extension_seen.set()
             self.server.requeue_taken()   # 插件重连（多半是被 Chrome 休眠后重启）：领走没交结果的任务再派一次
@@ -275,6 +277,7 @@ class BridgeServer(ThreadingHTTPServer):
         self.extension_seen = threading.Event()
         self.browser: str | None = None   # 插件回报的浏览器信息（第一次收到结果时记录），用来告诉用户是哪个浏览器在取数
         self.extension_version: str | None = None   # 插件报的版本；旧插件不报，保持 None
+        self.instances: list[str] = []   # 来连过的插件实例编号（一台电脑上几个浏览器 / Chrome 资料都装了插件时不止一个）
         last: Exception | None = None
         lo, hi = port_range(platform)
         for port in range(lo, hi + 1):
@@ -294,6 +297,19 @@ class BridgeServer(ThreadingHTTPServer):
         self.port = self.server_address[1]
         self._thread: threading.Thread | None = None
 
+    def saw_instance(self, inst: str) -> None:
+        """记下来连的插件实例；第二个出现时在终端提醒一次：任务会被随机哪一个接走，各自登录的可能是不同的店。"""
+        if not inst or inst in self.instances:
+            return
+        self.instances.append(inst)
+        from . import runlog
+        runlog.event("instance", instance=inst, count=len(self.instances))
+        if len(self.instances) == 2:
+            import sys
+            print(f"⚠️ 这台电脑上有 {len(self.instances)} 个取数桥插件在同时接任务（几个浏览器或几个 Chrome 资料都装了它）。"
+                  "任务会被随机哪一个接走，它们登录的可能是不同的账号和店铺。只留一个浏览器开着取数桥，"
+                  "其余的在 chrome://extensions 里关掉。", file=sys.stderr, flush=True)
+
     def requeue_taken(self) -> None:
         for job_id, job in list(self.taken.items()):
             if self.taken.pop(job_id, None) is not None and job_id in self.pending:
@@ -301,7 +317,7 @@ class BridgeServer(ThreadingHTTPServer):
                 self.jobs.put(job)
 
     def start(self) -> None:
-        self._lock = BridgeLock()
+        self._lock = BridgeLock(_lock_path(self.platform))
         self._lock.acquire()
         self._thread = threading.Thread(target=self.serve_forever, kwargs={"poll_interval": 0.1}, daemon=True)
         self._thread.start()
@@ -335,14 +351,57 @@ class BridgeServer(ThreadingHTTPServer):
             self.pending.pop(job_id, None)
 
 
+def _nick(who: dict | None) -> str:
+    """「昵称（账号编号）」：昵称可能一样（同一家店的子账号），带上编号才分得清。"""
+    nick, uid = (who or {}).get("nick") or "", (who or {}).get("uid") or ""
+    if not uid:
+        return "没有登录"
+    return f"{nick}（{uid}）" if nick else uid
+
+
+def _meta(res: dict) -> dict:
+    """插件随结果报的现场（写进运行日志）：当时登录的账号、发射台标签页、插件里的耗时和重试次数。"""
+    names = {"who": "who", "whoAfter": "whoAfter", "tab": "tab", "ms": "plugin_ms", "attempts": "plugin_attempts",
+             "instance": "instance"}
+    return {mine: res[theirs] for theirs, mine in names.items() if theirs in res}
+
+
 class BridgeSession:
     """和 curl_cffi Session 同样的 .get / .post 接口，请求交给浏览器插件去发。
-    请求头由浏览器按页面自己的规矩带（Origin、Referer、cookie），命令行传来的头不转交。"""
+    请求头由浏览器按页面自己的规矩带（Origin、Referer、cookie），命令行传来的头不转交。
+
+    一条命令只认一个账号：插件每次交结果都报请求前后浏览器里登录的账号（who / whoAfter）。
+    认定的账号 = --account 换好的那个，没指定就是第一次取数时登录的那个；之后哪次不一样，整条命令报错作废，
+    免得别的命令或有人在插件里切换账号时，把另一个账号的数据混进来。"""
 
     read_only = True   # 插件只读：Client 据此拒绝一切写操作
 
     def __init__(self, server: BridgeServer):
         self.server = server
+        self.account: dict | None = None   # {"uid", "nick"}：这条命令认定的账号
+        self.instance: str | None = None   # 这条命令认定的插件实例（第一个交结果的那个）
+
+    def _check_instance(self, res: dict) -> None:
+        inst = res.get("instance") or ""
+        if self.instance is None:
+            self.instance = inst
+        elif inst != self.instance:
+            raise PluginChanged(f"这条命令的请求被两个不同的取数桥插件接了（编号 {self.instance} 和 {inst}），"
+                                "它们在不同的浏览器或 Chrome 资料里，登录的可能是不同的店，这次取到的数据已作废。", stage="插件检查",
+                                hint="这台电脑上只留一个浏览器开着取数桥：其余浏览器 / Chrome 资料在 chrome://extensions 里把它关掉，再运行一次。")
+
+    def _check_who(self, res: dict) -> None:
+        self._check_instance(res)
+        who, after = res.get("who") or {}, res.get("whoAfter")
+        if after is not None and (after or {}).get("uid") != who.get("uid"):
+            raise AccountChanged(f"取数时浏览器里的账号被换了（请求前是「{_nick(who)}」，请求后是「{_nick(after)}」），这次取到的数据已作废。",
+                                 stage="账号检查", hint=SWITCH_HINT)
+        if self.account is None:
+            self.account = {"uid": who.get("uid") or "", "nick": who.get("nick") or ""}
+            return
+        if (who.get("uid") or "") != self.account["uid"]:
+            raise AccountChanged(f"取数途中浏览器里的账号换了：这条命令用的是「{_nick(self.account)}」，这次请求时登录的是「{_nick(who)}」，"
+                                 "取到的数据已作废。", stage="账号检查", hint=SWITCH_HINT)
 
     def _url(self, url: str, params: dict | None) -> str:
         if params:
@@ -363,12 +422,13 @@ class BridgeSession:
     def _reply(self, res: dict):
         if res.get("error"):
             self._fail(res)
+        self._check_who(res)
         if res.get("redirectedAway"):   # 插件 0.5.0 起：跟跳转失败时确认过是被平台转走了
             display = self.server.platform.display
             raise Redirected(f"{display}没有回数据，而是把请求转去了别的页面（多半是「访客太多，排队接待中」的排队页，也可能是登录页）。",
                              stage="平台返回", hint=f"在浏览器里打开{display}看一下：显示排队就过一会儿再试；要求登录就重新登录。")
         return SimpleNamespace(status_code=int(res.get("status") or 0), text=res.get("text") or "",
-                               url=res.get("landed") or "")
+                               url=res.get("landed") or "", meta=_meta(res))
 
     def get(self, url: str, params: dict | None = None, timeout: float | None = None, headers: dict | None = None):
         return self._reply(self.server.submit({"url": self._url(url, params)}, timeout or 60))
@@ -390,4 +450,5 @@ class BridgeSession:
         res = self.server.submit({"cookie": name}, 30)
         if res.get("error"):
             self._fail(res)
+        self._check_who(res)
         return res.get("value") or None

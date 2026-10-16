@@ -14,17 +14,16 @@ import os
 import re
 import sys
 import time
-from collections import Counter
 from pathlib import Path
 
 from mcp.server import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 from mcp.types import ToolAnnotations
 
-from .core import modules
+from .core import guides, modules
+from .core.paths import state_root
 
 ROOT = Path(__file__).resolve().parent.parent          # 包根目录：tb/ 的上一层
-GUIDES = ROOT / "references"                           # 各包的分析方法（打包时从 delivery/<产品>/references 拷来）
 TIMEOUT = float(os.environ.get("TB_MCP_TIMEOUT") or 540)   # 一条命令最长跑多久（秒）；Codex 的工具超时由 tb mcp install 调到 600
 INLINE = 20000                                          # 输出超过这么多字就存成文件，只交回开头和文件位置
 HEAD = 6000
@@ -33,7 +32,7 @@ DENY = {"mcp": "不能在 MCP 里再起 MCP。"}
 
 INSTRUCTIONS = ("店铺数据（只读）：借用户浏览器里已登录的后台读取店铺数据，不能修改店铺。"
                 "先用 doctor 检查环境；不确定有哪些数据，用 commands 看命令目录；用 run 运行命令；"
-                "做整份报告（日检、周复盘、单品诊断、测款、退货等）前，先用 guide 看分析方法。")
+                "做整份报告（月报、周报、日检、周复盘、单品诊断、测款、退货等）前，先用 guide 看分析方法：用户公司自己的要求优先。")
 
 
 def instructions() -> str:
@@ -74,18 +73,16 @@ def pick(platform: str) -> str:
     return platform
 
 
-def state_root() -> Path:
-    root = os.environ.get("TB_STATE_ROOT")
-    if root:
-        return Path(root).expanduser()
-    if os.name == "nt":
-        return Path(os.environ.get("LOCALAPPDATA") or Path.home() / "AppData" / "Local") / "taobao-cli"
-    return Path.home() / ".taobao-cli"
 
 
-async def execute(argv: list[str], timeout: float = TIMEOUT) -> tuple[int, str, str]:
-    """在子进程里跑命令行。超时或调用被取消时把子进程杀掉，不留后台进程。"""
+async def execute(argv: list[str], timeout: float = TIMEOUT, account: str = "", shop: str = "") -> tuple[int, str, str]:
+    """在子进程里跑命令行。超时或调用被取消时把子进程杀掉，不留后台进程。
+    account：先换成这个账号再取数（命令行的 TB_ACCOUNT，换号和取数在同一条命令里，别的调用插不进来）。"""
     env = {**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"}
+    for key, value in (("TB_ACCOUNT", account), ("TB_SHOP", shop)):
+        env.pop(key, None)
+        if value:
+            env[key] = value
     proc = await asyncio.create_subprocess_exec(*argv, cwd=ROOT, env=env, stdin=asyncio.subprocess.DEVNULL,
                                                 stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
     try:
@@ -121,28 +118,6 @@ def deliver(title: str, code: int, out: str, err: str, *, slug: str) -> str:
     return text
 
 
-def guides() -> dict[str, tuple[str, str]]:
-    """分析方法（各包 references/*.md）。带「## 通用规则」的是工作流合集：除「目录」「通用规则」外每个二级标题是一个主题
-    （「模块 N：」前缀去掉），通用规则每个主题都带上；别的文件整份是一个主题，用它的一级标题当名字。
-    几个工具合在一个包里时主题可能重名（生意参谋和 1688 都有「周复盘」），重名的后面带上所在文件的标题。"""
-    found: list[tuple[str, str, tuple[str, str]]] = []
-    for md in sorted(GUIDES.glob("*.md")):
-        text = md.read_text(encoding="utf-8")
-        h1 = re.search(r"(?m)^# (.+)$", text)
-        title = h1.group(1).strip() if h1 else md.stem
-        parts = re.split(r"(?m)^## ", text)[1:]   # 第一段是「# 大标题」
-        common = next(("## " + p.strip() for p in parts if p.startswith("通用规则")), "")
-        if not common:
-            found.append((title, title, ("", text.strip())))
-            continue
-        for p in parts:
-            head = p.split("\n", 1)[0].strip()
-            if head not in ("目录", "通用规则"):
-                found.append((re.sub(r"^模块\s*\d+\s*[：:]\s*", "", head), title, (common, "## " + p.strip())))
-    seen = Counter(name for name, _, _ in found)
-    return {(f"{name}（{title}）" if seen[name] > 1 else name): body for name, title, body in found}
-
-
 def build() -> MCPServer:
     # 工具里给 AI 看的错误一律用 ToolError：别的异常 SDK 只回「Error executing tool」，原因会被藏起来
     names = available()
@@ -170,30 +145,35 @@ def build() -> MCPServer:
 
     @mcp.tool(description="运行一条只读命令，例如 command=\"doctor\"，或 command=\"refund-list\", args=[\"--days\", \"7\"]。"
                           "参数照 commands 给出的写，一个参数一项。输出太长时会存成文件，返回开头和文件位置；"
-                          "要整份明细时可以加 --out 文件名。修改店铺的操作（如带 --execute 的）不能在这里运行。" + plat_doc,
+                          "要整份明细时可以加 --out 文件名。修改店铺的操作（如带 --execute 的）不能在这里运行。"
+                          "用户有几个账号、要取某个账号的数据时，account 填这个账号的名字（account 工具 list 里的名字）："
+                          "命令会先换成这个账号再取数，换号和取数一步做完。不要先用 account 工具 use 再 run——两步之间别的调用可能换走账号，取到别的店的数据。"
+                          "浏览器同一时间只登录一个账号，不同账号的取数会排队一个个跑。"
+                          "一个登录能看几家店、只要其中一家时，shop 填店铺编号（报错里会给出）；不填就按这个账号第一次取数时记下的店。" + plat_doc,
               annotations=ro)
-    async def run(command: str, args: list[str] | None = None, platform: str = "") -> str:
+    async def run(command: str, args: list[str] | None = None, platform: str = "", account: str = "", shop: str = "") -> str:
         p, args = pick(platform), list(args or [])
         if command in DENY:
             raise ToolError(DENY[command])
         if "--execute" in args:
             raise ToolError("带 --execute 的是修改店铺的操作，不能通过 AI 运行。请在终端里自己确认后运行。")
-        code, out, err = await execute(tb_argv(p, command, *args))
-        return deliver(" ".join(["tb", p, command, *args]), code, out, err, slug=f"{p}-{command}")
+        account, shop = account.strip(), shop.strip()
+        code, out, err = await execute(tb_argv(p, command, *args), account=account, shop=shop)
+        shown = ["tb", *(["--account", account] if account else []), *(["--shop", shop] if shop else []), p, command, *args]
+        return deliver(" ".join(shown), code, out, err, slug=f"{p}-{command}")
 
     @mcp.tool(description="切换账号（账号存在用户浏览器的取数桥插件里）：action=list 列出存过的账号和现在登录的是谁；"
                           "action=use 换成存过的某个账号（name 填 list 里的名字）；action=save 把浏览器里现在登录的账号存下来（name 是起的名字）；"
                           "action=check 查存下的账号还在不在（不切换，不填 name 就全部查）。"
-                          "淘宝/天猫（含千牛、生意参谋、达摩盘、万相台）一组，1688 一组，1688 的把 is_1688 设为 true。"
-                          "用户说「用某某店 / 某某账号的数据」时，先 list 找到对应的名字，再 use，然后再取数。"
+                          "用户说「用某某店 / 某某账号的数据」时，先 list 找到对应的名字，再在 run 的 account 里填这个名字取数（不要先 use 再 run）。"
                           "账号过期时不能替用户登录：请用户在浏览器里点插件图标重新登录。",
               annotations=ToolAnnotations(read_only_hint=False, destructive_hint=False, idempotent_hint=True, open_world_hint=False))
-    async def account(action: str = "list", name: str = "", is_1688: bool = False) -> str:
+    async def account(action: str = "list", name: str = "") -> str:
         if action not in ("list", "use", "save", "check"):
             raise ToolError("action 只能是 list、use、save 或 check。")
         if action == "use" and not name:
             raise ToolError("换账号要给 name（先用 action=list 看有哪些名字）。")
-        argv = ["account", action] + ([name] if name else []) + (["--1688"] if is_1688 and action != "list" else [])
+        argv = ["account", action] + ([name] if name else [])
         code, out, err = await execute(tb_argv(*argv), timeout=180)
         return deliver("tb " + " ".join(argv), code, out, err, slug=f"account-{action}")
 
@@ -209,19 +189,28 @@ def build() -> MCPServer:
         code, out, err = await execute(tb_argv(*argv), timeout=60)
         return deliver("tb " + " ".join(argv), code, out, err, slug=f"modules-{action}")
 
-    @mcp.tool(description="分析方法：做整份报告（日检、周复盘、单品诊断、测款、退货归因等）前先看。不带 topic 列出全部主题；"
-                          "带 topic 给出这个主题的取数步骤、计算方法和报告格式。",
+    @mcp.tool(description="运行日志：用户说取数出错、数据不对、要反馈问题时用。action=list 看最近几次运行（命令、成败、账号、店铺编号、错误）；"
+                          "action=export 把最近 7 天的命令行日志、插件日志和环境信息打成 zip 放到桌面，告诉用户把这个文件发给开发者。"
+                          "日志里没有密码、登录信息和经营数据。",
+              annotations=ToolAnnotations(read_only_hint=True, destructive_hint=False, open_world_hint=False))
+    async def log(action: str = "list") -> str:
+        if action not in ("list", "export"):
+            raise ToolError("action 只能是 list 或 export。")
+        code, out, err = await execute(tb_argv("log", action), timeout=120)
+        return deliver(f"tb log {action}", code, out, err, slug=f"log-{action}")
+
+    @mcp.tool(description="分析方法：做整份报告（月报、周报、日检、周复盘、单品诊断、测款、退货归因等）前先看。不带 topic 列出全部主题："
+                          "「本公司的分析要求」是用户公司自己写的，优先照它做；没有对应的才用通用分析方法。带 topic 给出这个主题的全文"
+                          "（取数步骤、计算方法、报告格式）。用户要新增或修改公司的报告要求时，写成 .md 放进列表最后给出的文件夹，"
+                          "不要改工具里的 references 和 SKILL.md（工具升级会冲掉）。",
               annotations=ToolAnnotations(read_only_hint=True, destructive_hint=False, open_world_hint=False))
     async def guide(topic: str = "") -> str:
-        topics = guides()
-        if not topics:
-            return "这个包没有附带分析方法。"
         if not topic:
-            return "分析方法主题：\n" + "\n".join(f"· {t}" for t in topics)
-        hit = topics.get(topic) or next((v for k, v in topics.items() if topic in k), None)
-        if not hit:
-            raise ToolError(f"没有这个主题：{topic}。可用：{'、'.join(topics)}")
-        return "\n\n".join(x for x in hit if x)
+            return guides.listing()
+        try:
+            return guides.show(topic)
+        except KeyError:
+            raise ToolError(f"没有这个主题：{topic}。\n{guides.listing()}") from None
 
     return mcp
 
@@ -234,7 +223,7 @@ def main(argv: list[str]) -> int:
         return mcp_install.main(argv)
     if argv[:1] == ["--check"]:
         server = build()
-        print(f"MCP 服务可以启动：{server_key()}（{'、'.join(display(n) for n in available())}），分析方法 {len(guides())} 个主题。")
+        print(f"MCP 服务可以启动：{server_key()}（{'、'.join(display(n) for n in available())}），分析方法 {len(guides.topics())} 个主题。")
         return 0
     build().run()
     return 0

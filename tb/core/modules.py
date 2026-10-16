@@ -24,15 +24,13 @@ MANIFEST_FILE = ROOT / "tb" / "modules_manifest.json"
 MIRROR_ENV = "TB_MODULE_MIRROR"                      # 另加一个下载地址（排在最前，测试和自建镜像用），{file} 换成文件名
 
 # 每个模块的代码目录（tb/platforms/ 下）
-DIRS = {"sycm": ("sycm",), "alimama": ("alimama",), "dmp": ("dmp",), "qianniu": ("qianniu",),
-        "1688": ("alibaba", "alisycm"), "voc": ("voc",)}
+DIRS = {"sycm": ("sycm",), "alimama": ("alimama",), "dmp": ("dmp",), "qianniu": ("qianniu",), "voc": ("voc",)}
 # 每个模块一句话：列表、推荐时给用户看
 ABOUT = {
     "sycm": "生意参谋：店铺大盘、商品、交易、退款、客服；日检、周复盘、单品诊断报告",
     "alimama": "万相台：广告花费、ROI、计划和关键词报表、在投计划",
     "dmp": "达摩盘：人群资产体检、人群画像、竞品对比、同店对标",
     "qianniu": "千牛：差评巡检、退款售后、待发货、物流、商品限流",
-    "1688": "1688：每个链接每天的出单数、新客老客、商品体检、询价、1688 生意参谋",
     "voc": "竞品评价：竞品的评价、问大家和买家秀，痛点报告（要淘宝买家账号）",
 }
 

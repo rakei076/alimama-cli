@@ -39,6 +39,7 @@ class Platform:
     build_request: Callable[[Any, str, str, dict], tuple[str, dict, dict]] | None = None
     # 业务层检查：(client, payload, resp, label)，失败时抛 tb.core.errors 里的错误；要重发时抛 RetryRequest
     check_payload: Callable[[Any, Any, Any, str], None] | None = None
+    shop_of: Callable[[Any, str], str | None] | None = None  # (回包, 请求地址) -> 是哪家店（店铺编号），认不出返回 None；用来防串店、写日志
     extension_only: bool = False                        # 只走浏览器插件，不退回读本机 Chrome 的 cookie（竞品评价：读 cookie 要系统权限，交付不可行）
     min_extension: str | None = None                    # 这个平台要求的最低插件版本（插件里新加了它的放行规则时填）；不填 = 底座的默认要求
 
@@ -53,7 +54,7 @@ class Platform:
         return f"{self.name}-cli"
 
     def state_dir(self) -> Path:
-        """状态目录（如 1688 的本地订单库）。优先级：<PREFIX>_STATE_DIR > TB_STATE_ROOT/<name> > 默认。"""
+        """平台自己的状态目录。优先级：<PREFIX>_STATE_DIR > TB_STATE_ROOT/<name> > 默认。"""
         override = self.env("STATE_DIR")
         if override:
             return Path(override).expanduser()

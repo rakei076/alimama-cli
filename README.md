@@ -1,5 +1,7 @@
 # 万相台 alimama-cli
 
+> **这是测试版 1.6.0-beta.1（dev 分支）**，计划 2026-10-20 转为正式版。想先试新功能就用这里的代码或[发布页的测试版](https://github.com/rakei076/alimama-cli/releases/tag/v1.6.0-beta.1)；求稳请用 [main 分支](https://github.com/rakei076/alimama-cli/tree/main) 和发布页标着 Latest 的正式版。
+
 ![License](https://img.shields.io/github/license/rakei076/alimama-cli)
 ![Python](https://img.shields.io/badge/python-3.10%2B-blue)
 ![Stars](https://img.shields.io/github/stars/rakei076/alimama-cli?style=social)

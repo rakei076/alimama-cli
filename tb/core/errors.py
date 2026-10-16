@@ -15,6 +15,10 @@ class TbError(RuntimeError):
         if hint:
             parts.append(f"建议：{hint}")
         super().__init__("\n".join(parts))
+        # 建出来就记一笔：各平台的命令行自己接住错误、打印、返回退出码，总入口看不到它们
+        from . import runlog
+        runlog.event("error", type=type(self).__name__, message=runlog._clean(message), endpoint=endpoint, stage=stage,
+                     hint=runlog._clean(hint) if hint else "")
 
 
 class RetryRequest(Exception):
@@ -43,4 +47,19 @@ class Redirected(TbError):
 
 
 class WriteBlocked(TbError):
+    exit_code = 1
+
+
+class AccountChanged(TbError):
+    """取数途中浏览器里登录的账号换了（别的命令或有人在插件里切换了账号）：这次的数据可能混进了别的账号，作废。"""
+    exit_code = 1
+
+
+class ShopChanged(TbError):
+    """同一条命令里先后拿到了两家店的数据：作废。"""
+    exit_code = 1
+
+
+class PluginChanged(TbError):
+    """一条命令的请求被两个不同的取数桥插件实例接了（几个浏览器 / Chrome 资料都装了插件，登录的可能是不同的店）：作废。"""
     exit_code = 1

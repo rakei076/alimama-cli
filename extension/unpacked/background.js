@@ -1,5 +1,5 @@
 // taobao-cli 取数桥（后台）
-// 一个插件服务所有本机工具：tb（生意参谋 / 万相台 / 千牛 / 达摩盘 / 1688）、taobao-voc。
+// 一个插件服务所有本机工具：tb（生意参谋 / 万相台 / 千牛 / 达摩盘）、taobao-voc。
 // 工作方式：本机的命令行临时开一个只监听 127.0.0.1 的小服务；这里去「拉任务」，
 // 在对应平台的已登录页面里用页面自己的身份发只读请求，再把结果交回去。
 // 安全：只放行 SITES 里登记的接口；GET 按地址前缀 + 写操作词拦截，POST 只放行逐个列出的只读查询接口（精确路径）；
@@ -11,7 +11,7 @@ const PORTS = [47831, 47832, 47833, 47834, 47835, 47836, 47837, 47838, 47839, 47
 // MTOP 签名令牌和防 CSRF 参数：命令行要用它们算签名 / 带进参数。登录 cookie（cookie2 等）一概不读。
 const TOKENS = ["_m_h5_tk", "_m_h5_tk_enc", "_tb_token_"];
 // 每个平台一项：键 = 发请求用的「发射台」页面（平台域名下极轻的同域小文档）。
-//   ALLOWED  允许的 GET 地址；WRITE = 名字像写操作的路径（拒绝）；SERVICES = 只认这些 serviceId（1688）
+//   ALLOWED  允许的 GET 地址；WRITE = 名字像写操作的路径（拒绝）
 //   POSTS    允许的 POST 接口：字符串 = 精确路径，正则 = 只为带编号的路径（域名是发射台本身或 ALLOWED 里的接口域名）；没有这一项的平台不放行任何 POST
 //   COOKIES  允许读的 cookie；HTTPONLY = 其中页面脚本读不到、要用 chrome.cookies 读的那几个
 const SITES = {
@@ -55,21 +55,6 @@ const SITES = {
     XSRF: "XSRF-TOKEN",   // 页面自己的请求会把这个 cookie 放进 X-XSRF-TOKEN 头，这里照做
     COOKIES: [],
   },
-  // 1688 卖家工作台：订单走同一个 MTOP 接口（dataline.service），读写只能靠参数里的 serviceId 区分，所以那一个接口还要 serviceId 白名单；
-  // 其余是逐个登记的只读接口（商品列表 / 流量 / 诊断、订单看板、物流、星级、询价、账单），名字以外的一概不放。
-  "https://air.1688.com/robots.txt": {
-    ALLOWED: [/^https:\/\/h5api\.m\.1688\.com\/h5\/(mtop\.1688\.trading\.dataline\.service|mtop\.1688\.offermanage\.offerlistquery|mtop\.1688\.offermanagedetailqueryservice\.getflowdatas|mtop\.alibaba\.cbu\.diag\.query\.item\.task|mtop\.1688\.offermanage\.growth\.queryaitasks|mtop\.alibaba\.cbu\.diag\.health\.overview|mtop\.alibaba\.cbu\.diag\.health\.effect\.data|mtop\.alibaba\.cbu\.diag\.health\.suggestion\.cards|mtop\.1688\.diagnosis\.offer\.querytaskinfolist|mtop\.cbu\.global\.fulfillment\.checkoutorder\.queryordercount|mtop\.1688\.com\.cnortools\.businesswarnservice\.kanban|mtop\.1688\.orderlogisticstagreadservice\.batchgettags|mtop\.cbu\.logistics\.operationworkplatform\.querydata|mtop\.1688\.offical\.lgt\.queryselleruserinfo|mtop\.alibaba\.cbu\.supplychain\.star\.querystarinfo|mtop\.1688\.industry\.app\.quotation\.seller\.list\.query|mtop\.1688\.shellcenter\.settle\.bill\.queryinitconfig|mtop\.1688\.shellcenter\.settle\.bill\.querysellerarrearsdetails)\/1\.0\//],
-    WRITE: /(update|create|delete|remove|modify|save|submit|cancel|operate|refund|close|pay)/i,
-    SERVICE_API: /\/mtop\.1688\.trading\.dataline\.service\//,
-    SERVICES: ["OrderListDataLineService.sellerOrderList", "OrderListDataLineService.sellerOrderStat"],
-    COOKIES: TOKENS,
-  },
-  // 1688 生意参谋：全是 GET，靠登录 cookie，不读任何 cookie。只放行 /ms/ 下的数据接口，名字像写操作的拒绝。
-  "https://sycm.1688.com/ms/common/commDate.json": {
-    ALLOWED: [/^https:\/\/sycm\.1688\.com\/ms\//],
-    WRITE: /(^|[/.])(add|create|update|delete|remove|save|submit|cancel|set|edit|upload|apply|bind|unbind|follow|unfollow|subscribe|order|buy|pay|send|modify|operate)([/.]|$)/i,
-    COOKIES: [],
-  },
   // taobao-voc（买家账号看竞品）：只放行搜索、评价、问大家三个接口。
   // unb（账号 ID）用来判断登录的是不是买家号、问大家接口要带；它是 HttpOnly，只能用 chrome.cookies 读，且只在这个平台读。
   "https://item.taobao.com/robots.txt": {
@@ -95,16 +80,12 @@ function allowed(job) {
   if (job.method && job.method !== "GET") return false;
   if (!site.ALLOWED || !site.ALLOWED.some((re) => re.test(job.url))) return false;
   if (site.WRITE.test(u.pathname) && !(site.READS && site.READS.includes(u.pathname))) return false;
-  if (site.SERVICES && (!site.SERVICE_API || site.SERVICE_API.test(u.pathname))) {
-    try { return site.SERVICES.includes(JSON.parse(u.searchParams.get("data")).serviceId); }
-    catch (_) { return false; }
-  }
   return true;
 }
 // ---- 放行规则结束 ----
 
 const DEV_AUTO_RELOAD = false;   // build.py 只在开发版里改成 true
-const BUILD = "2e3d9a57ca7d";        // build.py 写入构建号
+const BUILD = "41e054aeb8c9";        // build.py 写入构建号
 const HEADERS = { "X-Dmp-Bridge": chrome.runtime.id };  // 身份头：服务端只认允许的插件 ID（同时让浏览器先发预检）
 // 每次连命令行都报上自己的版本（放在网址参数里，不加新的请求头，免得旧命令行的预检不认）
 const VERSION = chrome.runtime.getManifest().version;
@@ -116,12 +97,40 @@ const state = { connected: false, app: "", lastJob: 0, jobs: 0, lastError: "" };
 
 const log = (...a) => console.log("[taobao-cli]", ...a);
 
+// 这个插件实例的编号（装好时随机生成，存在浏览器里）。一台电脑上几个浏览器、几个 Chrome 资料都装了取数桥时，
+// 它们都会来接命令行的任务；每次连接和交结果都报上编号，命令行才分得清是谁接的，一条命令被两个实例接了就作废。
+let instanceId = null;
+async function myInstance() {
+  if (instanceId) return instanceId;
+  const { instanceId: saved } = await chrome.storage.local.get("instanceId");
+  instanceId = saved || Array.from(crypto.getRandomValues(new Uint8Array(4)), (b) => b.toString(16).padStart(2, "0")).join("");
+  if (!saved) await chrome.storage.local.set({ instanceId });
+  return instanceId;
+}
+
+// 本地运行日志：每个取数任务、每次账号操作记一行（接口路径、当时登录的账号编号和昵称、发射台页面、耗时、错误；
+// 没有 cookie、没有取到的数据），最多留 500 行，只存在这个浏览器里。命令行 tb log export 会连同命令行日志一起导出，发给开发者排查。
+const JOURNAL_MAX = 500;
+let journalChain = Promise.resolve();
+function journal(entry) {   // 一条条排队写，免得同时写时互相覆盖
+  journalChain = journalChain.then(async () => {
+    const { journal: rows = [] } = await chrome.storage.local.get("journal");
+    rows.push({ t: Date.now(), ...entry });
+    await chrome.storage.local.set({ journal: rows.slice(-JOURNAL_MAX) });
+  }).catch((e) => log("写日志失败", String(e)));
+  return journalChain;
+}
+async function readJournal() {
+  await journalChain;
+  return (await chrome.storage.local.get("journal")).journal || [];
+}
+
 importScripts("accounts.js");   // 账号切换（handleAccount 等）
 
 async function findBridge() {
   for (const p of PORTS) {
     try {
-      const r = await fetch(`http://127.0.0.1:${p}/hello?v=${VERSION}`, { headers: HEADERS, signal: AbortSignal.timeout(800) });
+      const r = await fetch(`http://127.0.0.1:${p}/hello?v=${VERSION}&i=${await myInstance()}`, { headers: HEADERS, signal: AbortSignal.timeout(800) });
       if (r.ok) {
         const hello = await r.json();
         if (/^[a-z]+-cli$/.test(hello.app || "")) {
@@ -156,7 +165,7 @@ class NotLanded extends Error {}
 class PageNotOpened extends Error {}   // 辅助页面没打开（没加载完、空白页、错误页）：可能是一时的，重试一次
 
 // 淘宝系的统一登录页：停在这些地址上才说明没登录
-const LOGIN_HOSTS = ["login.taobao.com", "login.tmall.com", "login.1688.com", "login.m.taobao.com",
+const LOGIN_HOSTS = ["login.taobao.com", "login.tmall.com", "login.m.taobao.com",
   "havanalogin.taobao.com", "passport.alibaba.com", "passport.taobao.com"];
 
 function hostOf(url) {
@@ -308,7 +317,8 @@ async function runInPageInner(job) {
         : { target: { tabId: tab.id }, world: "MAIN", func: pageFetch,
             args: [job.url, job.method || "GET", job.body || "", site.REFERRER || "", site.XSRF || ""] });
       const out = res && res.result;
-      if (out && !out.network) return out;
+      // 现场：从哪个标签页发的、试了几次（写进日志，排查「发射台停在别处」「换号后旧页面」这类问题）
+      if (out && !out.network) return { ...out, attempts: attempt + 1, tab: { id: tab.id, url: (tab.url || "").split("?")[0] } };
       last = (out && out.error) || "页面没有返回结果";
     } catch (e) {
       if (e instanceof NotLanded) return { error: e.message, notLanded: true };   // 没登录或没权限：重试没用
@@ -319,7 +329,7 @@ async function runInPageInner(job) {
     log("请求失败，准备重试", attempt + 1, last);
     await sleep(1500 * (attempt + 1));
   }
-  return { error: "请求失败（已重试）：" + last };
+  return { error: "请求失败（已重试）：" + last, attempts: 3 };
 }
 
 function browserInfo() {
@@ -327,14 +337,47 @@ function browserInfo() {
   return `${m[1] === "Edg" ? "Edge" : "Chrome"} ${m[2] || ""}`.trim();
 }
 
+// 这一刻浏览器里登录的淘宝系账号（编号 + 昵称）；没登录返回 {uid: ""}
+async function loginNow() {
+  const me = whoIs("taobao", await scopeCookies("taobao"));
+  return { uid: me.uid, nick: me.nick };
+}
+
+function jobName(job) {
+  if (job.cookie) return "读 " + job.cookie;
+  try { return (job.method || "GET") + " " + new URL(job.url).host + new URL(job.url).pathname; } catch (_) { return String(job.url).slice(0, 80); }
+}
+
 async function handle(job) {
+  if (job.journal) {   // tb log export：本地日志 + 存了哪些账号（只有名字、昵称、编号）+ 现在登录的是谁
+    const accounts = await accountList();
+    return { id: job.id, journal: await readJournal(), accounts: accounts.scopes, current: accounts.current, browser: browserInfo(),
+             instance: await myInstance(), version: VERSION };
+  }
   if (job.account) {   // 账号切换：只回账号名和昵称，不回 cookie
     try { return { id: job.id, account: await handleAccount(job.account) }; }
-    catch (e) { return { id: job.id, error: String(e.message || e) }; }
+    catch (e) {
+      journal({ kind: "account", from: "命令行", op: job.account.op, name: job.account.name || "", error: String(e.message || e) });
+      return { id: job.id, error: String(e.message || e) };
+    }
   }
-  if (!allowed(job)) return { id: job.id, error: "插件拒绝：只允许已登记平台的只读接口。" };
-  try { return { id: job.id, browser: browserInfo(), ...(await runInPage(job)) }; }
-  catch (e) { return { id: job.id, error: "插件执行失败：" + String(e) }; }
+  const what = jobName(job);
+  if (!allowed(job)) {
+    journal({ kind: "job", app: state.app, job: what, error: "不在放行清单" });
+    return { id: job.id, error: "插件拒绝：只允许已登记平台的只读接口。" };
+  }
+  const t0 = Date.now();
+  // 请求前后各看一次登录的是谁：命令行据此认定这条命令只用一个账号，中途换了就作废
+  const who = await loginNow();
+  let out;
+  try { out = await runInPage(job); }
+  catch (e) { out = { error: "插件执行失败：" + String(e) }; }
+  const after = await loginNow();
+  const ms = Date.now() - t0;
+  journal({ kind: "job", id: String(job.id).slice(0, 8), app: state.app, job: what, who, ...(after.uid !== who.uid ? { whoAfter: after } : {}),
+            tab: out.tab, status: out.status, bytes: out.text ? out.text.length : undefined, landed: out.landed,
+            redirectedAway: out.redirectedAway, attempts: out.attempts, ms, error: out.error });
+  return { id: job.id, browser: browserInfo(), ...out, who, ...(after.uid !== who.uid ? { whoAfter: after } : {}), ms };
 }
 
 async function loop() {
@@ -357,7 +400,7 @@ async function loop() {
       idleSince = 0;
       const t0 = Date.now();
       let r;
-      try { r = await fetch(`${base}/next?wait=20&v=${VERSION}`, { headers: HEADERS }); }
+      try { r = await fetch(`${base}/next?wait=20&v=${VERSION}&i=${await myInstance()}`, { headers: HEADERS }); }
       catch (_) { base = null; state.connected = false; break; }
       state.connected = true;
       if (r.status === 204) {
@@ -369,13 +412,13 @@ async function loop() {
       if (!r.ok) { base = null; break; }
       misses = 0;
       const job = await r.json();
-      log("收到任务", job.account ? "账号 " + job.account.op : job.cookie ? "读 " + job.cookie : (job.method || "GET") + " " + new URL(job.url).pathname);
+      log("收到任务", job.account ? "账号 " + job.account.op : job.journal ? "导出日志" : jobName(job));
       state.lastJob = Date.now(); state.jobs += 1;
-      const out = await handle(job);
+      const out = { ...(await handle(job)), instance: await myInstance() };
       try { await fetch(`${base}/result`, { method: "POST", headers: { ...HEADERS, "Content-Type": "text/plain" }, body: JSON.stringify(out) }); }
       catch (e) { state.lastError = String(e); base = null; break; }
     }
-  } finally { running = false; }
+  } finally { running = false; if (!base) state.connected = false; }
 }
 
 // 唤醒：每 30 秒一次的闹钟、平台页面每几秒发来的「心跳」、以及用户打开平台页面时
@@ -386,8 +429,18 @@ chrome.runtime.onMessage.addListener((msg, _s, reply) => {
   if (msg && msg.type === "tick") loop();
   if (msg && msg.type === "status") reply({ ...state, base });
   if (msg && msg.type === "account") {   // 弹窗里的账号操作
+    // 有命令正连着插件取数时不许换号：换了，那条命令后面的请求就会取到另一个账号的数据
+    if (["use", "fresh", "remove"].includes(msg.op) && state.connected) {
+      const why = "有命令正在通过插件取数，等它跑完再换账号（不然取到的数据会混进另一个账号）。";
+      journal({ kind: "account", from: "弹窗", op: msg.op, name: msg.name || "", error: "取数中，拒绝换号" });
+      reply({ error: why });
+      return true;
+    }
     const run = msg.op === "remove" ? accountRemove(msg.scope, msg.name) : handleAccount(msg);
-    run.then((r) => reply({ ok: r }), (e) => reply({ error: String(e.message || e) }));
+    run.then((r) => reply({ ok: r }), (e) => {
+      journal({ kind: "account", from: "弹窗", op: msg.op, name: msg.name || "", error: String(e.message || e) });
+      reply({ error: String(e.message || e) });
+    });
     return true;
   }
 });

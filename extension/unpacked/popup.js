@@ -4,8 +4,6 @@ const TOOLS = [
   ["alimama-cli", "万相台", "广告报表、在投计划（只读）"],
   ["qianniu-cli", "千牛", "评价、商品、物流"],
   ["dmp-cli", "达摩盘", "人群资产、画像"],
-  ["alibaba-cli", "1688", "订单统计"],
-  ["alisycm-cli", "1688", "生意参谋"],
   ["voc-cli", "taobao-voc", "竞品评价、问大家（买家账号）"],
 ];
 
@@ -19,7 +17,7 @@ chrome.runtime.sendMessage({ type: "status" }, (st) => {
 });
 
 // ---- 账号切换 ----
-const LOGIN_URL = { taobao: "https://login.taobao.com/", "1688": "https://login.1688.com/" };
+const LOGIN_URL = { taobao: "https://login.taobao.com/" };
 const accMsg = (text) => { document.getElementById("msg").textContent = text || ""; };
 const askBg = (msg) => new Promise((ok) => chrome.runtime.sendMessage({ type: "account", ...msg }, ok));
 
@@ -44,8 +42,7 @@ async function renderAccounts() {
   const box = document.getElementById("accounts");
   box.textContent = "";
   if (!res || res.error) { accMsg(res ? res.error : "后台没有响应"); return; }
-  // 淘宝在前（JS 会把「1688」这种数字键排到最前）
-  for (const [scope, cur] of Object.entries(res.ok.current).sort(([a], [b]) => (a === "taobao" ? -1 : b === "taobao" ? 1 : 0))) {
+  for (const [scope, cur] of Object.entries(res.ok.current)) {
     const sec = document.createElement("div");
     sec.className = "acc";
     const h = document.createElement("h2");

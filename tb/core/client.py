@@ -12,12 +12,15 @@ import random
 import time
 from typing import Any
 
-from .errors import ApiFailed, EmptyResult, LoginExpired, Redirected, RetryRequest, RiskStopped, TbError, WriteBlocked
+from . import runlog
+from .errors import ApiFailed, EmptyResult, LoginExpired, Redirected, RetryRequest, RiskStopped, ShopChanged, TbError, WriteBlocked
 from .platform import Platform
 
 TIMEOUT = 60
 EMPTY_RETRY_WAIT = 4.0   # 平台回空内容时，第几次重发就等几倍这么多秒
 RETRIES = 2
+SHOP_RETRIES = 5        # 生意参谋跳到同一登录能看的另一家店时，最多重发几次（客户实测约一半的请求会跳）
+SHOP_RETRY_WAIT = 1.0   # 第几次重发就多等几倍这么多秒
 
 __all__ = ["Client", "TbError", "LoginExpired", "ApiFailed", "EmptyResult", "RiskStopped", "WriteBlocked"]
 
@@ -102,7 +105,26 @@ class Client:
 
     def send(self, url: str, params: dict[str, Any], label: str, headers: dict[str, str] | None = None, *,
              body: Any = None, method: str = "GET", retries: int = RETRIES) -> Any:
-        """发一次请求并做四道检查（平台钩子也用它）。method="POST" 时 body 按 JSON 发；写操作传 retries=0，绝不自动重发。"""
+        """发一次请求并做四道检查（平台钩子也用它）。method="POST" 时 body 按 JSON 发；写操作传 retries=0，绝不自动重发。
+        平台能从回包里认出店铺（Platform.shop_of）时，再查是不是这条命令该看的那家店：
+        一个登录能看几家店时，生意参谋会在请求之间随机跳到另一家，跳了就重发（只重发查询），重发几次还不对就报错，不交出别家店的数据。"""
+        p = self.platform
+        for jump in range(SHOP_RETRIES + 1):
+            payload = self._send_once(url, params, label, headers, body=body, method=method, retries=retries)
+            shop = p.shop_of(payload, url) if p.shop_of else None
+            if not shop or self._shop_ok(str(shop), label):
+                return payload
+            if jump < SHOP_RETRIES and method == "GET":
+                time.sleep(SHOP_RETRY_WAIT * (jump + 1))
+                continue
+            want = self.state.get("shop") or self._expected_shop()
+            raise ShopChanged(f"{p.display}连着 {jump + 1} 次返回的是店铺 {shop}，不是这条命令要的店铺 {want}，没有交出这份数据。",
+                              endpoint=label, stage="店铺检查",
+                              hint=f"多半是这个登录能看几家店（{p.display}店名旁边有「主店 ▾」），{p.display}跳到了另一家。过一会儿再试；"
+                                   f"如果就是要看店铺 {shop}，加 --shop {shop} 再运行（会记住，以后这个账号默认看它）。")
+
+    def _send_once(self, url: str, params: dict[str, Any], label: str, headers: dict[str, str] | None = None, *,
+                   body: Any = None, method: str = "GET", retries: int = RETRIES) -> Any:
         p = self.platform
         self._guard()
         if self.request_count and self.delay[1] > 0:
@@ -111,6 +133,7 @@ class Client:
                 time.sleep(wait)
         last_exc: Exception | None = None
         for attempt in range(retries + 1):
+            t0 = time.time()
             try:
                 merged = {"Referer": p.referer, "Accept": "application/json, text/plain, */*", **(headers or {})}
                 if method == "POST":
@@ -119,8 +142,13 @@ class Client:
                 else:
                     resp = self.session.get(url, params=params, timeout=TIMEOUT, headers=merged)
             except TbError:
+                runlog.event("req", endpoint=label, method=method, url=runlog.clean_url(url), params=runlog.clean_params(params),
+                             attempt=attempt + 1, ms=int((time.time() - t0) * 1000), failed=True)
                 raise                 # 已经判断清楚的错误（如被平台转走）不重试
             except Exception as exc:  # 网络错误重试
+                runlog.event("req", endpoint=label, method=method, url=runlog.clean_url(url), params=runlog.clean_params(params),
+                             attempt=attempt + 1, ms=int((time.time() - t0) * 1000), failed=True,
+                             exception=f"{type(exc).__name__}: {runlog._clean(str(exc))}")
                 if getattr(exc, "no_retry", False):  # 浏览器插件超时/被拒：重试没意义
                     raise TbError(str(exc), endpoint=label, stage="浏览器插件",
                                   hint=f"确认 Chrome 开着且插件已启用；{p.display}响应慢时可以再试一次。") from None
@@ -139,6 +167,9 @@ class Client:
             raise TbError(f"网络请求失败：{last_exc}", endpoint=label, stage="发送请求", hint="检查网络后重试。")
         self.request_count += 1
         self._last = time.time()
+        runlog.event("req", endpoint=label, method=method, url=runlog.clean_url(url), params=runlog.clean_params(params),
+                     attempt=attempt + 1, ms=int((self._last - t0) * 1000), status=resp.status_code,
+                     bytes=len(resp.text or ""), landed=_landed(resp, url) or None, **(getattr(resp, "meta", None) or {}))
 
         if resp.status_code in (502, 503, 504):   # 回的是网关的错误页，不是登录问题
             raise ApiFailed(f"{p.display}服务端超时或繁忙（HTTP {resp.status_code}）。", endpoint=label, stage="平台返回",
@@ -171,6 +202,51 @@ class Client:
         if p.check_payload:
             p.check_payload(self, payload, resp, label)
         return payload
+
+    # ---- 是谁的数据 ----
+    def login_uid(self) -> str:
+        """这条命令用的登录账号编号：走插件时是插件认定的账号，直接读 cookie 时是 unb。"""
+        account = getattr(self.session, "account", None)
+        if account is not None:
+            return account.get("uid") or ""
+        return self.cookies.get("unb") or ""
+
+    def _expected_shop(self) -> str | None:
+        """这条命令该看的店：--shop 指定的；没指定就是本机记下的「这个登录账号 → 店铺」；都没有返回 None。"""
+        import os
+        want = (os.environ.get("TB_SHOP") or "").strip()
+        if want:
+            return want
+        uid = self.login_uid()
+        if not uid:
+            return None
+        from . import shops
+        return shops.lookup(self.platform.name, uid)
+
+    def _shop_ok(self, shop: str, label: str) -> bool:
+        """回包里的店对不对：一条命令里第一次认出的店就是这条命令的店，之后都得是它。
+        第一次认出时：和该看的店（_expected_shop）一样才算；还没记过就记下来（终端说一声，认错了可以用 --shop 改）。"""
+        current = self.state.get("shop")
+        if current is not None:
+            if shop != current:
+                runlog.event("shop_jump", endpoint=label, got=shop, want=current)
+            return shop == current
+        want = self._expected_shop()
+        if want is not None and shop != want:
+            runlog.event("shop_jump", endpoint=label, got=shop, want=want)
+            return False
+        self.state["shop"] = shop
+        uid = self.login_uid()
+        runlog.event("shop", endpoint=label, shop=shop, login=uid)
+        if uid:
+            import os
+            from . import shops
+            before = shops.remember(self.platform.name, uid, shop)
+            if before is None and not os.environ.get("TB_SHOP"):
+                import sys
+                print(f"已记下：这个账号在{self.platform.display}里看的是店铺 {shop}。以后返回别的店会被拦下；"
+                      f"要换成别的店，加 --shop <店铺编号>。", file=sys.stderr)
+        return True
 
     # ---- 对外 ----
     def whoami(self) -> dict:

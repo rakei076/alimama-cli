@@ -1,4 +1,4 @@
-"""MTOP H5 网关（淘宝系通用）：签名、令牌换发、业务失败检查。千牛、1688 等平台共用，只有网关域名不同。
+"""MTOP H5 网关（淘宝系通用）：签名、令牌换发、业务失败检查。千牛等走 MTOP 的平台共用。
 
 公开算法（H5 web 通用）：
     sign = md5(token + "&" + timestamp + "&" + appKey + "&" + data_json)
@@ -20,7 +20,7 @@ from urllib.parse import urlencode
 from .errors import ApiFailed, LoginExpired, RetryRequest
 
 H5_APP_KEY = "12574478"
-TAOBAO_GATEWAY = "https://h5api.m.taobao.com/h5"
+GATEWAY = "https://h5api.m.taobao.com/h5"
 TOKEN_COOKIES = ("_m_h5_tk", "_m_h5_tk_enc")
 
 
@@ -36,7 +36,7 @@ def token_of(h5_tk: str | None) -> str:
 
 
 def build_mtop_request(api: str, version: str, data: dict[str, Any] | None, token: str, *,
-                       gateway: str = TAOBAO_GATEWAY, timestamp_ms: int | None = None) -> str:
+                       timestamp_ms: int | None = None) -> str:
     """构造 MTOP H5 网关请求 URL（签名已包含在查询串里）。timestamp_ms 可注入固定时间戳（测试用）。"""
     ts = str(timestamp_ms if timestamp_ms is not None else int(time.time() * 1000))
     # JSON.stringify 等价：紧凑 + 保留 unicode（不转义中文）
@@ -45,7 +45,7 @@ def build_mtop_request(api: str, version: str, data: dict[str, Any] | None, toke
         "jsv": "2.6.1", "appKey": H5_APP_KEY, "t": ts, "sign": _md5(f"{token}&{ts}&{H5_APP_KEY}&{data_json}"),
         "api": api, "v": version, "type": "originaljson", "dataType": "json", "data": data_json,
     }
-    return f"{gateway}/{api}/{version}/?{urlencode(query)}"
+    return f"{GATEWAY}/{api}/{version}/?{urlencode(query)}"
 
 
 def is_sign_error(mtop_resp: dict[str, Any]) -> bool:
@@ -94,12 +94,12 @@ def refreshed_h5_cookies(resp: Any) -> dict[str, str]:
     return out
 
 
-def signed_request(client, gateway: str, path: str, params: dict) -> tuple[str, dict, dict]:
+def signed_request(client, path: str, params: dict) -> tuple[str, dict, dict]:
     """Platform.build_request 的通用实现：路径写成 /<api>/<version>/，参数是业务 data，由这里签名。"""
     api, _, version = path.strip("/").partition("/")
     # 还没有令牌（这个浏览器从没调过 MTOP）：用空令牌发一次，网关会回「令牌为空」并下发新令牌，check_mtop 再重签重发。
     tk = client.cookie("_m_h5_tk")
-    url = build_mtop_request(api, version.strip("/") or "1.0", params, token_of(tk) if tk else "", gateway=gateway)
+    url = build_mtop_request(api, version.strip("/") or "1.0", params, token_of(tk) if tk else "")
     return url, {}, {}
 
 

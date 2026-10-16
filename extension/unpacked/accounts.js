@@ -1,17 +1,16 @@
 // 账号切换：把一个账号的登录 cookie 存在插件里，要用哪个就换上哪个。
 // 登录 cookie 只在这个插件里存取，不交给命令行、不发往任何地方；命令行只能说「列出」「保存为某名字」「换成某名字」。
-// 两组互不影响：淘宝系（淘宝、天猫、千牛、生意参谋、达摩盘、万相台）一组，1688 一组。
+// 账号是淘宝系的：淘宝、天猫、千牛、生意参谋、达摩盘、万相台共用一套登录。
 
 const SCOPES = {
   taobao: { label: "淘宝/天猫", domains: ["taobao.com", "tmall.com", "tmall.hk", "alimama.com"], login: "https://login.taobao.com/",
             // 检查页：掉线时服务器直接转去登录页（10/11 校准过）。生意参谋的登录单独过期，千牛在线时它也可能要重登，所以两个都查
             checks: [["千牛", "https://myseller.taobao.com/home.htm"], ["生意参谋", "https://sycm.taobao.com/portal/home.htm"]] },
-  "1688": { label: "1688", domains: ["1688.com"], login: "https://login.1688.com/", checks: [["1688", "https://cart.1688.com/cart.htm"]] },
 };
 
 // 判断「是谁」用的 cookie：账号编号、昵称（子账号是「主账号:子账号」）
-const ID_COOKIES = { taobao: ["unb"], "1688": ["__cn_logon_id__", "unb"] };
-const NICK_COOKIES = { taobao: ["sn", "_nk_", "tracknick", "lgc"], "1688": ["__cn_logon_id__", "lid", "sn"] };
+const ID_COOKIES = { taobao: ["unb"] };
+const NICK_COOKIES = { taobao: ["sn", "_nk_", "tracknick", "lgc"] };
 
 function unescapeNick(v) {
   let s = v || "";
@@ -55,11 +54,9 @@ async function setCookie(c) {
   await chrome.cookies.set(d);
 }
 
-// 操作记录：每次保存、切换、登录新账号记一行（只有账号昵称和数量，没有 cookie 值），最多留 100 行。tb account log 能看
+// 操作记录：每次保存、切换、登录新账号、删除、检查记一行（只有账号昵称和数量，没有 cookie 值），写进插件的本地日志（background.js 的 journal）。tb account log 能看
 async function note(entry) {
-  const { accountLog = [] } = await chrome.storage.local.get("accountLog");
-  accountLog.push({ t: Date.now(), ...entry });
-  await chrome.storage.local.set({ accountLog: accountLog.slice(-100) });
+  await journal({ kind: "account", ...entry });
 }
 
 function idCount(scope, cookies) {   // 还剩几个账号编号 cookie（清干净应为 0）
@@ -267,21 +264,23 @@ async function accountCheck(scope, name) {
 async function accountRemove(scope, name) {
   const v = await loadVault();
   if (!v.accounts[scope] || !v.accounts[scope][name]) throw new Error(`没有存过「${name}」`);
+  const nick = v.accounts[scope][name].nick;
   delete v.accounts[scope][name];
   if (v.activeAccount[scope] === name) delete v.activeAccount[scope];
   await saveVault(v);
+  await note({ op: "remove", scope, name, nick });
   return { scope, name, removed: true };
 }
 
 // 命令行发来的账号任务：{account: {op, scope, name}}。返回值里绝不带 cookie。
 async function handleAccount(req) {
-  const scope = req.scope || "taobao";   // check 例外：不给 scope 就两组都查
+  const scope = req.scope || "taobao";
   if (req.op === "list") return await accountList();
   if (req.op === "save") return await accountSave(scope, req.name);
   if (req.op === "use") return await accountUse(scope, req.name);
   if (req.op === "fresh") return await accountFresh(scope);
   if (req.op === "check") return await accountCheck(req.scope || "", req.name || "");
-  if (req.op === "log") return (await chrome.storage.local.get("accountLog")).accountLog || [];
+  if (req.op === "log") return (await readJournal()).filter((e) => e.kind === "account").slice(-100);
   throw new Error(`不认识的账号操作：${req.op}`);   // 删除只能在插件弹窗里点
 }
 
