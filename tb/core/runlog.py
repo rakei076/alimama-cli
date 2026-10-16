@@ -197,16 +197,16 @@ def cmd_list(args) -> int:
         print("最近没有运行记录。")
         return 0
     for x in rows:
-        code = "进行中/中断" if x["code"] is None else ("成功" if x["code"] == 0 else f"失败（{x['code']}）")
+        code = "未结束或已中断" if x["code"] is None else ("成功" if x["code"] == 0 else f"失败（{x['code']}）")
         extra = "".join([f"  账号：{'、'.join(x['accounts'])}" if x["accounts"] else "",
                          f"  店铺：{'、'.join(map(str, x['shops']))}" if x["shops"] else "",
                          f"  请求 {x['requests']} 次" if x["requests"] else "",
-                         f"  跳店 {x['jumps']} 次" if x["jumps"] else "",
-                         f"  ⚠️ {len(x['instances'])} 个插件接了任务" if len(x["instances"]) > 1 else ""])
+                         f"  返回其他店铺 {x['jumps']} 次" if x["jumps"] else "",
+                         f"  ⚠️ 由 {len(x['instances'])} 个取数桥插件处理" if len(x["instances"]) > 1 else ""])
         print(f"{(x['t'] or '?')[5:19].replace('T', ' ')}  [{x['run']}]  tb {' '.join(x['argv'])}  {code}{extra}")
         if x["error"]:
             print(f"    错误：{x['error'].splitlines()[0][:150]}")
-    print(f"\n日志在 {folder()}。出了问题运行 tb log export，把生成的 zip 发给开发者。")
+    print(f"\n日志位置：{folder()}。遇到问题时，请运行 tb log export，并将生成的 zip 文件发送给开发者。")
     return 0
 
 
@@ -220,7 +220,7 @@ def _plugin_journal() -> tuple[dict | None, str]:
     server.start()
     try:
         if not transport._wait_for_extension(server, 30):
-            return None, "30 秒内没有连上浏览器插件（Chrome 没开、插件没装或被停用）"
+            return None, "30 秒内未能连接取数桥插件（Chrome 未打开，或插件未安装、已停用）"
         res = server.submit({"journal": True}, 30)
         if res.get("error"):
             return None, str(res["error"])
@@ -265,24 +265,24 @@ def cmd_export(args) -> int:
         for f in sorted(folder().glob("*.jsonl")) if folder().exists() else []:
             if f.stem >= cut:
                 z.write(f, f"命令行日志/{f.name}")
-        z.writestr("插件日志.json", json.dumps(journal if journal else {"没有取到": why}, ensure_ascii=False, indent=1))
+        z.writestr("插件日志.json", json.dumps(journal if journal else {"未获取": why}, ensure_ascii=False, indent=1))
         z.writestr("环境.json", json.dumps(_environment(), ensure_ascii=False, indent=1, default=str))
     print(f"✅ 日志已导出：{path}")
     if not journal:
-        print(f"   ⚠️ 插件日志没有取到（{why}），只导出了命令行日志。", file=sys.stderr)
-    print("   把这个文件发给开发者就行。里面有命令、出错信息、账号昵称和店铺编号；没有密码、登录信息和经营数据。")
+        print(f"   ⚠️ 未能获取插件日志（{why}），仅导出了命令行日志。", file=sys.stderr)
+    print("   请将该文件发送给开发者。文件包含命令记录、错误信息、账号昵称和店铺编号，不包含密码、登录信息和经营数据。")
     return 0
 
 
 def main(argv: list[str]) -> int:
-    ap = argparse.ArgumentParser(prog="tb log", description="运行日志：看最近几次运行，或导出给开发者排查问题。")
+    ap = argparse.ArgumentParser(prog="tb log", description="运行日志：查看最近几次运行，或导出日志供开发者排查问题。")
     sp = ap.add_subparsers(dest="cmd")
-    ls = sp.add_parser("list", help="看最近几次运行（默认）")
+    ls = sp.add_parser("list", help="查看最近几次运行（默认）")
     ls.add_argument("--days", type=int, default=3)
     ls.add_argument("--limit", type=int, default=20)
-    ex = sp.add_parser("export", help="把日志打成 zip（默认放桌面），发给开发者")
+    ex = sp.add_parser("export", help="将日志打包为 zip 文件（默认保存到桌面），用于发送给开发者")
     ex.add_argument("--days", type=int, default=7)
-    ex.add_argument("--out", help="放到哪个文件夹（默认桌面）")
+    ex.add_argument("--out", help="保存位置（默认为桌面）")
     if not argv or argv[0].startswith("-") and argv[0] not in ("-h", "--help"):
         argv = ["list", *argv]   # tb log --days 1 = tb log list --days 1
     args = ap.parse_args(argv)

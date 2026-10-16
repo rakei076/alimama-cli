@@ -3,7 +3,7 @@
  "modules": {
   "sycm": {
    "file": "module-sycm-1.6.0-beta.1.zip",
-   "sha256": "ed02fb193d58bcc41e0be123de37408657269c3207ad55435f930479799fc37e",
+   "sha256": "f2485cbff0a5b21d6e0031435c06e998f35d12d0d102bc31c6b1d11d46a89f87",
    "urls": [
     "https://gitee.com/rakel076/sycm-cli/releases/download/v1.6.0-beta.1/module-sycm-1.6.0-beta.1.zip",
     "https://github.com/rakei076/sycm-cli/releases/download/v1.6.0-beta.1/module-sycm-1.6.0-beta.1.zip"

@@ -57,10 +57,10 @@ def main(argv: list[str] | None = None) -> int:
         from .core import modules
         print("用法：tb <平台> <命令...>    例：tb sycm doctor\n已打开的工具：" + "、".join(modules.enabled())
               + "\n打开 / 关闭工具：tb modules\n检查插件：tb plugin"
-              "\n给 AI 客户端用的 MCP 服务：tb mcp\n切换账号：tb account（取某个账号的数据：tb --account <账号名> <平台> <命令>）"
-              "\n一个登录能看几家店时只要其中一家：tb --shop <店铺编号> <平台> <命令>"
-              "\n运行日志：tb log（出了问题运行 tb log export，把生成的 zip 发给开发者）"
-              "\n分析方法：tb guide（本公司自己的月报、周报等要求放在 tb guide --where 给出的文件夹，优先照它）")
+              "\n给 AI 客户端用的 MCP 服务：tb mcp\n切换账号：tb account（读取指定账号的数据：tb --account <账号名称> <平台> <命令>）"
+              "\n指定店铺（一个账号可查看多个店铺时）：tb --shop <店铺编号> <平台> <命令>"
+              "\n运行日志：tb log（遇到问题时运行 tb log export，并将生成的 zip 文件发送给开发者）"
+              "\n分析方法：tb guide（自定义分析要求保存在 tb guide --where 显示的文件夹中，优先使用）")
         return 0
     if argv[0] == "--list":
         from .core import modules

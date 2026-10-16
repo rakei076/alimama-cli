@@ -118,10 +118,10 @@ class Client:
                 time.sleep(SHOP_RETRY_WAIT * (jump + 1))
                 continue
             want = self.state.get("shop") or self._expected_shop()
-            raise ShopChanged(f"{p.display}连着 {jump + 1} 次返回的是店铺 {shop}，不是这条命令要的店铺 {want}，没有交出这份数据。",
+            raise ShopChanged(f"{p.display}连续 {jump + 1} 次返回店铺 {shop} 的数据，与本次命令的店铺 {want} 不一致，数据未输出。",
                               endpoint=label, stage="店铺检查",
-                              hint=f"多半是这个登录能看几家店（{p.display}店名旁边有「主店 ▾」），{p.display}跳到了另一家。过一会儿再试；"
-                                   f"如果就是要看店铺 {shop}，加 --shop {shop} 再运行（会记住，以后这个账号默认看它）。")
+                              hint=f"当前登录账号可以查看多个店铺（店铺名称旁显示「主店 ▾」），{p.display}返回了其他店铺的数据。请稍后重试；"
+                                   f"如需查看店铺 {shop}，请添加 --shop {shop} 后重新运行（该设置会被保存，此后该账号默认使用店铺 {shop}）。")
 
     def _send_once(self, url: str, params: dict[str, Any], label: str, headers: dict[str, str] | None = None, *,
                    body: Any = None, method: str = "GET", retries: int = RETRIES) -> Any:
@@ -244,8 +244,8 @@ class Client:
             before = shops.remember(self.platform.name, uid, shop)
             if before is None and not os.environ.get("TB_SHOP"):
                 import sys
-                print(f"已记下：这个账号在{self.platform.display}里看的是店铺 {shop}。以后返回别的店会被拦下；"
-                      f"要换成别的店，加 --shop <店铺编号>。", file=sys.stderr)
+                print(f"已记录：该账号在{self.platform.display}中对应的店铺编号为 {shop}。之后如返回其他店铺的数据，工具会拦截；"
+                      f"如需更换店铺，请添加 --shop <店铺编号>。", file=sys.stderr)
         return True
 
     # ---- 对外 ----

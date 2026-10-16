@@ -111,13 +111,13 @@ def _use_account(server, client: Client, name: str) -> None:
     """拿到排队锁之后、取数之前先换号：换号和取数在同一条命令里，别的命令插不进来。"""
     res = server.submit({"account": {"op": "use", "scope": "taobao", "name": name}}, 60)
     if res.get("error"):
-        raise TbError(f"换不成账号「{name}」：{res['error']}", stage="切换账号",
-                      hint="运行 tb account list 看存过哪些账号（名字要一模一样）；账号掉线了就在插件里切过去重新登录一次。")
+        raise TbError(f"无法切换到账号「{name}」：{res['error']}", stage="切换账号",
+                      hint="请运行 tb account list 查看已保存的账号名称（需完全一致）；如账号已过期，请在插件中切换到该账号并重新登录。")
     acc = res["account"]
     client.session.account = {"uid": acc.get("uid") or "", "nick": acc.get("nick") or ""}
     client.session.instance = res.get("instance") or ""   # 换号的是哪个插件，取数也必须是它
     runlog.event("account", name=acc.get("name"), nick=acc.get("nick"), uid=acc.get("uid"), already=bool(acc.get("already")))
-    print(f"已换成账号「{acc.get('name')}」（{acc.get('nick')}），接着取数。", file=sys.stderr)
+    print(f"已切换到账号「{acc.get('name')}」（{acc.get('nick')}），开始读取数据。", file=sys.stderr)
 
 
 def make_client(plat: Platform) -> Client:
@@ -126,8 +126,8 @@ def make_client(plat: Platform) -> Client:
     account = wanted_account()
     if account:
         if m == "cookies":
-            raise TbError("指定账号（--account）要通过浏览器插件切换，不能和直接读 cookie 的方式一起用。", stage="切换账号",
-                          hint=f"去掉 {plat.env_prefix}_MODE=cookies 再运行。")
+            raise TbError("指定账号（--account）需要通过取数桥插件切换，无法与直接读取 Cookie 的方式同时使用。", stage="切换账号",
+                          hint=f"请去掉 {plat.env_prefix}_MODE=cookies 后重新运行。")
         m = "extension"
     if m == "cookies":
         if windows:

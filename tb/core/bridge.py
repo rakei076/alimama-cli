@@ -73,8 +73,8 @@ def _dbg(plat: Platform, msg: str) -> None:
         print(f"[bridge {_t.strftime('%H:%M:%S')}] {msg}", file=sys.stderr, flush=True)
 
 
-SWITCH_HINT = ("有别的命令或有人在插件里切换了账号。同一时间只跑一个账号的取数；要取某个账号的数据，"
-               "用 tb --account <名字> <平台> <命令>（MCP 的 run 填 account），换号和取数一步做完，中间不会被插队。")
+SWITCH_HINT = ("可能有其他命令或用户在插件中切换了账号。请确保同一时间只读取一个账号的数据；如需读取指定账号，"
+               "请使用 tb --account <账号名称> <平台> <命令>（MCP 中填写 run 的 account 参数），工具会在同一条命令中完成切换和读取。")
 
 
 class BridgeError(RuntimeError):
@@ -306,9 +306,9 @@ class BridgeServer(ThreadingHTTPServer):
         runlog.event("instance", instance=inst, count=len(self.instances))
         if len(self.instances) == 2:
             import sys
-            print(f"⚠️ 这台电脑上有 {len(self.instances)} 个取数桥插件在同时接任务（几个浏览器或几个 Chrome 资料都装了它）。"
-                  "任务会被随机哪一个接走，它们登录的可能是不同的账号和店铺。只留一个浏览器开着取数桥，"
-                  "其余的在 chrome://extensions 里关掉。", file=sys.stderr, flush=True)
+            print(f"⚠️ 检测到这台电脑上有 {len(self.instances)} 个取数桥插件同时在线（安装在不同的浏览器或 Chrome 用户资料中）。"
+                  "请求可能由其中任意一个处理，而它们登录的可能是不同的账号和店铺。请只保留一个浏览器启用取数桥插件，"
+                  "在其他浏览器的 chrome://extensions 中将其关闭。", file=sys.stderr, flush=True)
 
     def requeue_taken(self) -> None:
         for job_id, job in list(self.taken.items()):
@@ -355,7 +355,7 @@ def _nick(who: dict | None) -> str:
     """「昵称（账号编号）」：昵称可能一样（同一家店的子账号），带上编号才分得清。"""
     nick, uid = (who or {}).get("nick") or "", (who or {}).get("uid") or ""
     if not uid:
-        return "没有登录"
+        return "未登录"
     return f"{nick}（{uid}）" if nick else uid
 
 
@@ -386,22 +386,22 @@ class BridgeSession:
         if self.instance is None:
             self.instance = inst
         elif inst != self.instance:
-            raise PluginChanged(f"这条命令的请求被两个不同的取数桥插件接了（编号 {self.instance} 和 {inst}），"
-                                "它们在不同的浏览器或 Chrome 资料里，登录的可能是不同的店，这次取到的数据已作废。", stage="插件检查",
-                                hint="这台电脑上只留一个浏览器开着取数桥：其余浏览器 / Chrome 资料在 chrome://extensions 里把它关掉，再运行一次。")
+            raise PluginChanged(f"本次命令的请求由两个不同的取数桥插件处理（编号 {self.instance}、{inst}）。它们位于不同的浏览器或 "
+                                "Chrome 用户资料中，登录的可能是不同的店铺，本次数据已作废。", stage="插件检查",
+                                hint="请只在一个浏览器中启用取数桥插件：在其他浏览器或 Chrome 用户资料中打开 chrome://extensions，关闭该插件后重新运行。")
 
     def _check_who(self, res: dict) -> None:
         self._check_instance(res)
         who, after = res.get("who") or {}, res.get("whoAfter")
         if after is not None and (after or {}).get("uid") != who.get("uid"):
-            raise AccountChanged(f"取数时浏览器里的账号被换了（请求前是「{_nick(who)}」，请求后是「{_nick(after)}」），这次取到的数据已作废。",
+            raise AccountChanged(f"读取过程中，浏览器的登录账号发生了变化（请求前为「{_nick(who)}」，请求后为「{_nick(after)}」）。本次数据已作废。",
                                  stage="账号检查", hint=SWITCH_HINT)
         if self.account is None:
             self.account = {"uid": who.get("uid") or "", "nick": who.get("nick") or ""}
             return
         if (who.get("uid") or "") != self.account["uid"]:
-            raise AccountChanged(f"取数途中浏览器里的账号换了：这条命令用的是「{_nick(self.account)}」，这次请求时登录的是「{_nick(who)}」，"
-                                 "取到的数据已作废。", stage="账号检查", hint=SWITCH_HINT)
+            raise AccountChanged(f"读取过程中，浏览器的登录账号发生了变化：本次命令使用的账号为「{_nick(self.account)}」，"
+                                 f"该请求发出时登录的是「{_nick(who)}」。本次数据已作废。", stage="账号检查", hint=SWITCH_HINT)
 
     def _url(self, url: str, params: dict | None) -> str:
         if params:

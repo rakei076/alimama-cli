@@ -32,7 +32,7 @@ DENY = {"mcp": "不能在 MCP 里再起 MCP。"}
 
 INSTRUCTIONS = ("店铺数据（只读）：借用户浏览器里已登录的后台读取店铺数据，不能修改店铺。"
                 "先用 doctor 检查环境；不确定有哪些数据，用 commands 看命令目录；用 run 运行命令；"
-                "做整份报告（月报、周报、日检、周复盘、单品诊断、测款、退货等）前，先用 guide 看分析方法：用户公司自己的要求优先。")
+                "生成整份报告（月报、周报、日检、周复盘、单品诊断、测款、退货等）前，先用 guide 查看分析方法：用户的自定义分析要求优先。")
 
 
 def instructions() -> str:
@@ -146,10 +146,10 @@ def build() -> MCPServer:
     @mcp.tool(description="运行一条只读命令，例如 command=\"doctor\"，或 command=\"refund-list\", args=[\"--days\", \"7\"]。"
                           "参数照 commands 给出的写，一个参数一项。输出太长时会存成文件，返回开头和文件位置；"
                           "要整份明细时可以加 --out 文件名。修改店铺的操作（如带 --execute 的）不能在这里运行。"
-                          "用户有几个账号、要取某个账号的数据时，account 填这个账号的名字（account 工具 list 里的名字）："
-                          "命令会先换成这个账号再取数，换号和取数一步做完。不要先用 account 工具 use 再 run——两步之间别的调用可能换走账号，取到别的店的数据。"
-                          "浏览器同一时间只登录一个账号，不同账号的取数会排队一个个跑。"
-                          "一个登录能看几家店、只要其中一家时，shop 填店铺编号（报错里会给出）；不填就按这个账号第一次取数时记下的店。" + plat_doc,
+                          "读取指定账号的数据时，account 填写账号名称（account 工具 list 返回的名称）：工具会在同一条命令中先切换账号再读取。"
+                          "不要先用 account 工具 use 再调用 run：两步之间账号可能被其他调用切换，导致读取到其他店铺的数据。"
+                          "浏览器同一时间只能登录一个账号，不同账号的读取会依次排队执行。"
+                          "一个登录账号可以查看多个店铺时，shop 填写要查看的店铺编号（报错信息中会给出）；不填写时使用该账号首次读取时记录的店铺。" + plat_doc,
               annotations=ro)
     async def run(command: str, args: list[str] | None = None, platform: str = "", account: str = "", shop: str = "") -> str:
         p, args = pick(platform), list(args or [])
@@ -189,9 +189,9 @@ def build() -> MCPServer:
         code, out, err = await execute(tb_argv(*argv), timeout=60)
         return deliver("tb " + " ".join(argv), code, out, err, slug=f"modules-{action}")
 
-    @mcp.tool(description="运行日志：用户说取数出错、数据不对、要反馈问题时用。action=list 看最近几次运行（命令、成败、账号、店铺编号、错误）；"
-                          "action=export 把最近 7 天的命令行日志、插件日志和环境信息打成 zip 放到桌面，告诉用户把这个文件发给开发者。"
-                          "日志里没有密码、登录信息和经营数据。",
+    @mcp.tool(description="运行日志：用户反馈读取出错、数据不符或需要报告问题时使用。action=list 查看最近几次运行（命令、结果、账号、店铺编号、错误）；"
+                          "action=export 将最近 7 天的命令行日志、插件日志和环境信息打包为 zip 文件保存到桌面，并请用户将该文件发送给开发者。"
+                          "日志不包含密码、登录信息和经营数据。",
               annotations=ToolAnnotations(read_only_hint=True, destructive_hint=False, open_world_hint=False))
     async def log(action: str = "list") -> str:
         if action not in ("list", "export"):
@@ -199,10 +199,10 @@ def build() -> MCPServer:
         code, out, err = await execute(tb_argv("log", action), timeout=120)
         return deliver(f"tb log {action}", code, out, err, slug=f"log-{action}")
 
-    @mcp.tool(description="分析方法：做整份报告（月报、周报、日检、周复盘、单品诊断、测款、退货归因等）前先看。不带 topic 列出全部主题："
-                          "「本公司的分析要求」是用户公司自己写的，优先照它做；没有对应的才用通用分析方法。带 topic 给出这个主题的全文"
-                          "（取数步骤、计算方法、报告格式）。用户要新增或修改公司的报告要求时，写成 .md 放进列表最后给出的文件夹，"
-                          "不要改工具里的 references 和 SKILL.md（工具升级会冲掉）。",
+    @mcp.tool(description="分析方法：生成整份报告（月报、周报、日检、周复盘、单品诊断、测款、退货归因等）前先查看。不填 topic 时列出全部主题："
+                          "「自定义分析要求」由用户团队编写，优先使用；没有对应主题时再使用通用分析方法。填写 topic 时返回该主题的全文"
+                          "（取数步骤、计算方法、报告格式）。用户需要新增或修改报告要求时，将其写成 .md 文件保存到列表末尾给出的文件夹，"
+                          "不要修改工具内的 references 和 SKILL.md（升级时会被覆盖）。",
               annotations=ToolAnnotations(read_only_hint=True, destructive_hint=False, open_world_hint=False))
     async def guide(topic: str = "") -> str:
         if not topic:
@@ -210,7 +210,7 @@ def build() -> MCPServer:
         try:
             return guides.show(topic)
         except KeyError:
-            raise ToolError(f"没有这个主题：{topic}。\n{guides.listing()}") from None
+            raise ToolError(f"未找到主题：{topic}。\n{guides.listing()}") from None
 
     return mcp
 

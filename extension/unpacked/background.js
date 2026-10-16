@@ -85,7 +85,7 @@ function allowed(job) {
 // ---- 放行规则结束 ----
 
 const DEV_AUTO_RELOAD = false;   // build.py 只在开发版里改成 true
-const BUILD = "41e054aeb8c9";        // build.py 写入构建号
+const BUILD = "377574441b6d";        // build.py 写入构建号
 const HEADERS = { "X-Dmp-Bridge": chrome.runtime.id };  // 身份头：服务端只认允许的插件 ID（同时让浏览器先发预检）
 // 每次连命令行都报上自己的版本（放在网址参数里，不加新的请求头，免得旧命令行的预检不认）
 const VERSION = chrome.runtime.getManifest().version;
@@ -431,7 +431,7 @@ chrome.runtime.onMessage.addListener((msg, _s, reply) => {
   if (msg && msg.type === "account") {   // 弹窗里的账号操作
     // 有命令正连着插件取数时不许换号：换了，那条命令后面的请求就会取到另一个账号的数据
     if (["use", "fresh", "remove"].includes(msg.op) && state.connected) {
-      const why = "有命令正在通过插件取数，等它跑完再换账号（不然取到的数据会混进另一个账号）。";
+      const why = "有命令正在通过插件读取数据，请等待其完成后再切换账号，否则读取的数据可能来自其他账号。";
       journal({ kind: "account", from: "弹窗", op: msg.op, name: msg.name || "", error: "取数中，拒绝换号" });
       reply({ error: why });
       return true;
