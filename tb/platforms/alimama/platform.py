@@ -18,6 +18,7 @@ ALIMAMA = Platform(
     # 登录态 cookie2/unb 住在 .taobao.com（阿里通用登录），.alimama.com 下只有 wk_ 前缀的同义版本，所以必须连 taobao 域一起读。
     login_cookies=("cookie2", "unb"),
     cookie_domains=("taobao.com", "tmall.com", "alimama.com", "one.alimama.com"),
+    session_cookie_domain=".alimama.com",   # 接口在 one.alimama.com：cookie 挂在 .taobao.com 下请求一个都带不上，平台回「用于会话的cookie异常」
     referer="https://one.alimama.com/index.html",
     expired_hints=(),
     # 读取通道拒绝的「动词前缀」：路径段以这些词开头（后接大写字母 / 下划线 / 点 / 斜杠 / 结尾）就是写操作，如 updatePart、deleteAll
